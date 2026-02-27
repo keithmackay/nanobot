@@ -76,6 +76,7 @@ class DiscordConfig(Base):
     gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
     intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
     guilds: dict[str, DiscordGuildConfig] = Field(default_factory=dict)  # guild_id -> config
+    react_emoji: str = "👀"  # Emoji to react with on message receipt (acknowledgment)
 
 
 class MatrixConfig(Base):

@@ -144,6 +144,21 @@ class DiscordChannel(BaseChannel):
                     await asyncio.sleep(1)
         return False
 
+    async def _react(self, channel_id: str, message_id: str, emoji: str) -> None:
+        """Add a reaction to a Discord message (best-effort)."""
+        if not self._http or not message_id:
+            return
+        import urllib.parse
+        encoded = urllib.parse.quote(emoji)
+        url = f"{DISCORD_API_BASE}/channels/{channel_id}/messages/{message_id}/reactions/{encoded}/@me"
+        headers = {"Authorization": f"Bot {self.config.token}"}
+        try:
+            response = await self._http.put(url, headers=headers)
+            if response.status_code not in (200, 204):
+                logger.debug("Discord react failed: {} {}", response.status_code, response.text[:100])
+        except Exception as e:
+            logger.debug("Discord react error: {}", e)
+
     async def _gateway_loop(self) -> None:
         """Main gateway loop: identify, heartbeat, dispatch events."""
         if not self._ws:
@@ -261,6 +276,10 @@ class DiscordChannel(BaseChannel):
                 content_parts.append(f"[attachment: {filename} - download failed]")
 
         reply_to = (payload.get("referenced_message") or {}).get("id")
+        message_id = str(payload.get("id", ""))
+
+        # React with acknowledgment emoji before dispatching
+        asyncio.create_task(self._react(channel_id, message_id, self.config.react_emoji))
 
         await self._start_typing(channel_id)
 

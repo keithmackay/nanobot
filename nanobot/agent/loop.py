@@ -309,6 +309,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            message_id=(msg.metadata or {}).get("message_id"),
             persistent_context=persistent_context,
         )
 
@@ -331,12 +332,15 @@ class AgentLoop:
             "background task {} starting for {}:{} prompt={!r}",
             record.id, msg.channel, msg.chat_id, msg.content[:80],
         )
-        await self.bus.publish_outbound(OutboundMessage(
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            content="⚙️ On it — I'll update you as I work.",
-            metadata={"reply_to": reply_to} if reply_to else {},
-        ))
+        # Discord acknowledges via emoji reaction (added by DiscordChannel on receipt).
+        # For other channels, send a text ACK.
+        if msg.channel != "discord":
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="⚙️ On it — I'll update you as I work.",
+                metadata={"reply_to": reply_to} if reply_to else {},
+            ))
 
         model = self.model
 
@@ -501,6 +505,7 @@ class AgentLoop:
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
+            message_id=(msg.metadata or {}).get("message_id"),
             persistent_context=persistent_context,
         )
 
