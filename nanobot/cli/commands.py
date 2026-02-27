@@ -295,6 +295,7 @@ def gateway(
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
+    from nanobot.health.service import HealthService
     
     if verbose:
         import logging
@@ -354,8 +355,22 @@ def gateway(
                 content=response or ""
             ))
         return response
-    cron.on_job = on_cron_job
+    _orig_on_cron_job = on_cron_job
+
+    async def on_cron_job_with_health(job: CronJob) -> str | None:
+        health.mark_cron_run(job.name)
+        return await _orig_on_cron_job(job)
+
+    cron.on_job = on_cron_job_with_health
     
+    # Create health service
+    health = HealthService(
+        workspace=config.workspace_path,
+        stale_threshold_s=config.gateway.health_stale_threshold_s
+            if hasattr(config.gateway, "health_stale_threshold_s") else 3600,
+    )
+    agent.health_service = health
+
     # Create channel manager
     channels = ChannelManager(config, bus)
 
@@ -392,6 +407,7 @@ def gateway(
         )
 
     async def on_heartbeat_notify(response: str) -> None:
+        health.mark_heartbeat_tick()
         """Deliver a heartbeat response to the user's channel."""
         from nanobot.bus.events import OutboundMessage
         channel, chat_id = _pick_heartbeat_target()
@@ -431,6 +447,12 @@ def gateway(
         try:
             await cron.start()
             await heartbeat.start()
+            health.mark_started(
+                channels=list(channels.enabled_channels),
+                heartbeat_interval_s=hb_cfg.interval_s if hb_cfg.enabled else None,
+                cron_job_count=cron.status()["jobs"],
+            )
+            await health.start()
             await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
@@ -440,6 +462,7 @@ def gateway(
         finally:
             await agent.close_mcp()
             heartbeat.stop()
+            health.stop()
             cron.stop()
             agent.stop()
             await channels.stop_all()
@@ -803,6 +826,88 @@ def channels_login():
         console.print(f"[red]Bridge failed: {e}[/red]")
     except FileNotFoundError:
         console.print("[red]npm not found. Please install Node.js.[/red]")
+
+
+# ============================================================================
+# Health Command
+# ============================================================================
+
+
+@app.command()
+def health(
+    json_output: bool = typer.Option(False, "--json", help="Output raw JSON"),
+):
+    """Show nanobot health status (reads workspace health.json)."""
+    import json as _json
+    from nanobot.config.loader import load_config
+
+    config = load_config()
+    health_path = config.workspace_path / "health.json"
+
+    if not health_path.exists():
+        console.print("[yellow]No health.json found — gateway may not be running.[/yellow]")
+        raise typer.Exit(1)
+
+    try:
+        snap = _json.loads(health_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        console.print(f"[red]Failed to read health.json: {e}[/red]")
+        raise typer.Exit(1)
+
+    if json_output:
+        console.print(_json.dumps(snap, indent=2))
+        return
+
+    import time as _time
+    ok = snap.get("ok", False)
+    stale = snap.get("stale", False)
+    uptime = snap.get("uptime_s")
+    ts = snap.get("ts", 0)
+    age_s = (_time.time() * 1000 - ts) / 1000 if ts else None
+
+    status_icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+    stale_label = " [yellow](STALE)[/yellow]" if stale else ""
+    console.print(f"{status_icon} nanobot health{stale_label}")
+
+    if age_s is not None:
+        console.print(f"  Snapshot age:   {age_s:.0f}s ago")
+    if uptime is not None:
+        h, rem = divmod(int(uptime), 3600)
+        m, s = divmod(rem, 60)
+        console.print(f"  Uptime:         {h}h {m}m {s}s")
+
+    agent = snap.get("agent", {})
+    last_turn = agent.get("last_turn_age_s")
+    if last_turn is not None:
+        console.print(f"  Last agent turn: {last_turn:.0f}s ago")
+    else:
+        console.print("  Last agent turn: [dim]never[/dim]")
+
+    hb = snap.get("heartbeat", {})
+    hb_age = hb.get("last_tick_age_s")
+    hb_interval = hb.get("interval_s")
+    hb_str = f"{hb_age:.0f}s ago" if hb_age is not None else "[dim]never[/dim]"
+    if hb_interval:
+        hb_str += f" (every {hb_interval}s)"
+    console.print(f"  Heartbeat:       {hb_str}")
+
+    cr = snap.get("cron", {})
+    cr_jobs = cr.get("job_count", 0)
+    cr_age = cr.get("last_run_age_s")
+    cr_job = cr.get("last_job", "")
+    cr_str = f"{cr_age:.0f}s ago" if cr_age is not None else "[dim]never[/dim]"
+    if cr_job:
+        cr_str += f" ({cr_job})"
+    console.print(f"  Cron ({cr_jobs} jobs): {cr_str}")
+
+    channels = snap.get("channels", {})
+    if channels:
+        parts = []
+        for ch, info in channels.items():
+            age = info.get("last_message_age_s")
+            age_str = f"{age:.0f}s ago" if age is not None else "no messages"
+            parts.append(f"{ch} ({age_str})")
+        console.print(f"  Channels:        {', '.join(parts)}")
 
 
 # ============================================================================

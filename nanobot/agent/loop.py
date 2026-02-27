@@ -29,6 +29,7 @@ from nanobot.session.manager import Session, SessionManager
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig
     from nanobot.cron.service import CronService
+    from nanobot.health.service import HealthService
 
 
 class AgentLoop:
@@ -63,6 +64,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         claude_mem: Any | None = None,
+        health_service: HealthService | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
@@ -78,6 +80,7 @@ class AgentLoop:
         self.brave_api_key = brave_api_key
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
+        self.health_service = health_service
         self.restrict_to_workspace = restrict_to_workspace
 
         self.context = ContextBuilder(workspace)
@@ -279,6 +282,8 @@ class AgentLoop:
     async def _dispatch(self, msg: InboundMessage) -> None:
         """Process a message under the global lock."""
         async with self._processing_lock:
+            if self.health_service:
+                self.health_service.mark_agent_turn(channel=msg.channel, chat_id=msg.chat_id)
             try:
                 response = await self._process_message(msg)
                 if response is not None:
