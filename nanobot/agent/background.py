@@ -98,12 +98,12 @@ def _event_to_activity(event: dict) -> str | None:
         if block.get("type") == "tool_use":
             name = block.get("name", "tool")
             inp = block.get("input") or {}
-            val = next((str(v)[:60] for v in inp.values() if v), "")
+            val = next((str(v)[:300] for v in inp.values() if v), "")
             return f'{name}("{val}")' if val else name
         if block.get("type") == "text":
             text = (block.get("text") or "").strip()
             if text:
-                return text[:80] + ("…" if len(text) > 80 else "")
+                return text[:500] + ("…" if len(text) > 500 else "")
     return None
 
 
