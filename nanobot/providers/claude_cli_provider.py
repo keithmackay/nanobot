@@ -116,7 +116,7 @@ class ClaudeCliProvider(LLMProvider):
         event was emitted, an error result event is synthesised from the stderr output.
         """
         model_id = self._resolve_model(model or self.default_model)
-        cmd = [self.claude_bin, "--print", prompt, "--output-format", "stream-json"]
+        cmd = [self.claude_bin, "--print", "--verbose", prompt, "--output-format", "stream-json"]
         if model_id:
             cmd += ["--model", model_id]
 
