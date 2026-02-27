@@ -376,6 +376,26 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
+    # Claude CLI: uses the local `claude` binary + user's subscription (no API key).
+    ProviderSpec(
+        name="claude_cli",
+        keywords=("claude-cli", "claude_cli"),
+        env_key="",                         # No API key — uses local CLI auth
+        display_name="Claude CLI",
+        litellm_prefix="",                  # Not routed through LiteLLM
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=False,
+        is_local=True,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="",
+        default_api_base="",
+        strip_model_prefix=False,
+        model_overrides=(),
+        is_oauth=True,                      # No API key required
+        is_direct=True,                     # Bypasses LiteLLM
+    ),
+
     # === Auxiliary (not a primary LLM provider) ============================
 
     # Groq: mainly used for Whisper voice transcription, also usable for LLM.
