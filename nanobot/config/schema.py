@@ -255,6 +255,7 @@ class HeartbeatConfig(Base):
 
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
+    model: str = ""  # Override model for heartbeat decision phase (empty = use main agent model)
 
 
 class GatewayConfig(Base):

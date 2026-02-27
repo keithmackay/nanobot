@@ -229,14 +229,17 @@ def _create_workspace_templates(workspace: Path):
     (workspace / "skills").mkdir(exist_ok=True)
 
 
-def _make_provider(config: Config):
-    """Create the appropriate LLM provider from config."""
+def _make_provider(config: Config, model: str | None = None):
+    """Create the appropriate LLM provider from config.
+
+    Pass *model* to override the default model (e.g. for a heartbeat provider).
+    """
     from nanobot.providers.litellm_provider import LiteLLMProvider
     from nanobot.providers.openai_codex_provider import OpenAICodexProvider
     from nanobot.providers.custom_provider import CustomProvider
     from nanobot.providers.claude_cli_provider import ClaudeCliProvider
 
-    model = config.agents.defaults.model
+    model = model or config.agents.defaults.model
     provider_name = config.get_provider_name(model)
     p = config.get_provider(model)
 
@@ -389,10 +392,16 @@ def gateway(
         await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
     hb_cfg = config.gateway.heartbeat
+    if hb_cfg.model:
+        hb_provider = _make_provider(config, model=hb_cfg.model)
+        hb_model = hb_cfg.model
+    else:
+        hb_provider = provider
+        hb_model = agent.model
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
-        provider=provider,
-        model=agent.model,
+        provider=hb_provider,
+        model=hb_model,
         on_execute=on_heartbeat_execute,
         on_notify=on_heartbeat_notify,
         interval_s=hb_cfg.interval_s,
