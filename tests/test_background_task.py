@@ -252,6 +252,19 @@ async def test_run_background_task_reply_to(tmp_path):
 # ClaudeCliProvider.run_task_streaming
 # ---------------------------------------------------------------------------
 
+def _make_mock_proc(stdout_lines, stderr_lines=None, returncode=0):
+    """Helper to build a mock subprocess with stdout, stderr, and returncode."""
+    mock_proc = MagicMock()
+    mock_proc.stdout = AsyncMock()
+    mock_proc.stdout.readline = AsyncMock(side_effect=stdout_lines)
+    mock_proc.stderr = AsyncMock()
+    mock_proc.stderr.readline = AsyncMock(side_effect=(stderr_lines or []) + [b""])
+    mock_proc.kill = MagicMock()
+    mock_proc.wait = AsyncMock()
+    mock_proc.returncode = returncode
+    return mock_proc
+
+
 @pytest.mark.asyncio
 async def test_run_task_streaming_parses_events():
     """Streaming subprocess output is parsed as NDJSON events."""
@@ -260,13 +273,10 @@ async def test_run_task_streaming_parses_events():
     lines = [
         b'{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n',
         b'{"type":"result","result":"done","is_error":false}\n',
+        b"",
     ]
 
-    mock_proc = MagicMock()
-    mock_proc.stdout = AsyncMock()
-    mock_proc.stdout.readline = AsyncMock(side_effect=lines + [b""])
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock()
+    mock_proc = _make_mock_proc(lines, returncode=0)
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         provider = ClaudeCliProvider(stream_timeout=60)
@@ -287,11 +297,8 @@ async def test_run_task_streaming_timeout():
         await asyncio.sleep(10)
         return b""
 
-    mock_proc = MagicMock()
-    mock_proc.stdout = AsyncMock()
+    mock_proc = _make_mock_proc([], returncode=0)
     mock_proc.stdout.readline = AsyncMock(side_effect=slow_readline)
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock()
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         provider = ClaudeCliProvider(stream_timeout=1)
@@ -315,11 +322,7 @@ async def test_run_task_streaming_skips_invalid_json():
         b"",
     ]
 
-    mock_proc = MagicMock()
-    mock_proc.stdout = AsyncMock()
-    mock_proc.stdout.readline = AsyncMock(side_effect=lines)
-    mock_proc.kill = MagicMock()
-    mock_proc.wait = AsyncMock()
+    mock_proc = _make_mock_proc(lines, returncode=0)
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
         provider = ClaudeCliProvider(stream_timeout=60)
@@ -327,6 +330,44 @@ async def test_run_task_streaming_skips_invalid_json():
 
     assert len(events) == 1
     assert events[0]["type"] == "result"
+
+
+@pytest.mark.asyncio
+async def test_run_task_streaming_nonzero_exit_yields_error():
+    """Non-zero exit without a result event yields a synthetic error event with stderr."""
+    from nanobot.providers.claude_cli_provider import ClaudeCliProvider
+
+    stderr_lines = [b"Error: not logged in\n"]
+    # stdout returns nothing — subprocess failed immediately
+    mock_proc = _make_mock_proc([b""], stderr_lines=stderr_lines, returncode=1)
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        provider = ClaudeCliProvider(stream_timeout=60)
+        events = [e async for e in provider.run_task_streaming("hello")]
+
+    assert len(events) == 1
+    assert events[0].get("is_error") is True
+    assert "not logged in" in events[0].get("result", "")
+
+
+@pytest.mark.asyncio
+async def test_run_task_streaming_nonzero_exit_with_result_no_synthetic_error():
+    """If a result event was already emitted, non-zero exit does NOT add another error event."""
+    from nanobot.providers.claude_cli_provider import ClaudeCliProvider
+
+    lines = [
+        b'{"type":"result","result":"partial output","is_error":true}\n',
+        b"",
+    ]
+    mock_proc = _make_mock_proc(lines, returncode=1)
+
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        provider = ClaudeCliProvider(stream_timeout=60)
+        events = [e async for e in provider.run_task_streaming("hello")]
+
+    # Only the original result event — no duplicate
+    assert len(events) == 1
+    assert events[0]["result"] == "partial output"
 
 
 # ---------------------------------------------------------------------------

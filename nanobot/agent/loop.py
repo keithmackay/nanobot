@@ -327,6 +327,10 @@ class AgentLoop:
         record = registry.create(msg.channel, msg.chat_id, msg.content)
 
         reply_to = (msg.metadata or {}).get("message_id")
+        logger.info(
+            "background task {} starting for {}:{} prompt={!r}",
+            record.id, msg.channel, msg.chat_id, msg.content[:80],
+        )
         await self.bus.publish_outbound(OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,

@@ -8,6 +8,8 @@ import re
 import subprocess
 from typing import Any
 
+from loguru import logger
+
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 # Map shorthand model names (OpenClaw-style) to claude CLI model IDs
@@ -109,11 +111,16 @@ class ClaudeCliProvider(LLMProvider):
         Uses stream_timeout (default 15 min) suitable for long multi-step tasks.
         Claude Code drives its own tool-calling loop; events are yielded in real time
         so callers can post progress updates.
+
+        Stderr is drained concurrently; if the subprocess exits non-zero and no result
+        event was emitted, an error result event is synthesised from the stderr output.
         """
         model_id = self._resolve_model(model or self.default_model)
         cmd = [self.claude_bin, "--print", prompt, "--output-format", "stream-json"]
         if model_id:
             cmd += ["--model", model_id]
+
+        logger.info("run_task_streaming: launching {} (model={})", self.claude_bin, model_id)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -122,7 +129,24 @@ class ClaudeCliProvider(LLMProvider):
         )
 
         timed_out = False
+        got_result_event = False
         deadline = asyncio.get_event_loop().time() + self.stream_timeout
+
+        # Collect stderr lines concurrently so the pipe never blocks stdout.
+        stderr_lines: list[str] = []
+
+        async def _drain_stderr() -> None:
+            assert proc.stderr is not None
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                decoded = line.decode("utf-8", errors="replace").rstrip()
+                if decoded:
+                    stderr_lines.append(decoded)
+                    logger.debug("claude stderr: {}", decoded)
+
+        stderr_task = asyncio.create_task(_drain_stderr())
 
         try:
             while True:
@@ -143,7 +167,10 @@ class ClaudeCliProvider(LLMProvider):
                 decoded = line.decode("utf-8", errors="replace").strip()
                 if decoded:
                     try:
-                        yield json.loads(decoded)
+                        event = json.loads(decoded)
+                        if event.get("type") == "result":
+                            got_result_event = True
+                        yield event
                     except json.JSONDecodeError:
                         pass
         finally:
@@ -152,11 +179,28 @@ class ClaudeCliProvider(LLMProvider):
             except ProcessLookupError:
                 pass
             await proc.wait()
+            await stderr_task  # ensure stderr is fully drained
+
+        returncode = proc.returncode
+        logger.info(
+            "run_task_streaming: subprocess exited rc={} timed_out={} got_result={}",
+            returncode,
+            timed_out,
+            got_result_event,
+        )
 
         if timed_out:
             yield {
                 "type": "result",
                 "result": f"Error: claude CLI timed out after {self.stream_timeout}s.",
+                "is_error": True,
+            }
+        elif returncode != 0 and not got_result_event:
+            stderr_text = "\n".join(stderr_lines).strip() or f"claude exited with code {returncode}"
+            logger.warning("run_task_streaming: non-zero exit without result event: {}", stderr_text)
+            yield {
+                "type": "result",
+                "result": f"Error: claude CLI exited with code {returncode}: {stderr_text}",
                 "is_error": True,
             }
 
