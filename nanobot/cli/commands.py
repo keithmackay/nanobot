@@ -249,7 +249,8 @@ def _make_provider(config: Config, model: str | None = None):
 
     # Claude CLI (local subscription via `claude` binary)
     if provider_name == "claude_cli" or model.startswith("claude-cli/"):
-        return ClaudeCliProvider(default_model=model)
+        cli_timeout = (p.timeout if p and p.timeout is not None else None) or 300
+        return ClaudeCliProvider(default_model=model, timeout=cli_timeout)
 
     # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
     if provider_name == "custom":

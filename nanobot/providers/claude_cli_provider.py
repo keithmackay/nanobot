@@ -39,10 +39,11 @@ _TOOL_INJECTION = (
 class ClaudeCliProvider(LLMProvider):
     """Provider that calls the `claude` CLI binary using the user's Claude subscription."""
 
-    def __init__(self, default_model: str = "claude-cli/claude-sonnet-4-5", claude_bin: str = "claude"):
+    def __init__(self, default_model: str = "claude-cli/claude-sonnet-4-5", claude_bin: str = "claude", timeout: int = 300):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
         self.claude_bin = claude_bin
+        self.timeout = timeout
 
     def _resolve_model(self, model: str) -> str:
         """Strip claude-cli/ prefix and map shorthand names to full model IDs."""
@@ -72,7 +73,7 @@ class ClaudeCliProvider(LLMProvider):
                 finish_reason="error",
             )
         except subprocess.TimeoutExpired:
-            return LLMResponse(content="Error: claude CLI timed out (120s).", finish_reason="error")
+            return LLMResponse(content=f"Error: claude CLI timed out ({self.timeout}s).", finish_reason="error")
         except Exception as e:
             return LLMResponse(content=f"Error calling claude CLI: {e}", finish_reason="error")
 
@@ -82,7 +83,7 @@ class ClaudeCliProvider(LLMProvider):
         cmd = [self.claude_bin, "--print", prompt, "--output-format", "json"]
         if model_id:
             cmd += ["--model", model_id]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
         if result.returncode != 0:
             err = result.stderr.strip() or f"claude exited with code {result.returncode}"
             raise RuntimeError(err)
