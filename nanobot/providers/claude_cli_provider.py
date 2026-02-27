@@ -39,11 +39,18 @@ _TOOL_INJECTION = (
 class ClaudeCliProvider(LLMProvider):
     """Provider that calls the `claude` CLI binary using the user's Claude subscription."""
 
-    def __init__(self, default_model: str = "claude-cli/claude-sonnet-4-5", claude_bin: str = "claude", timeout: int = 300):
+    def __init__(
+        self,
+        default_model: str = "claude-cli/claude-sonnet-4-5",
+        claude_bin: str = "claude",
+        timeout: int = 300,
+        stream_timeout: int = 900,  # 15 min for long-running background tasks
+    ):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
         self.claude_bin = claude_bin
         self.timeout = timeout
+        self.stream_timeout = stream_timeout
 
     def _resolve_model(self, model: str) -> str:
         """Strip claude-cli/ prefix and map shorthand names to full model IDs."""
@@ -91,6 +98,67 @@ class ClaudeCliProvider(LLMProvider):
 
     def get_default_model(self) -> str:
         return self.default_model
+
+    async def run_task_streaming(
+        self,
+        prompt: str,
+        model: str | None = None,
+    ):
+        """Run claude --print with stream-json output, yielding events as they arrive.
+
+        Uses stream_timeout (default 15 min) suitable for long multi-step tasks.
+        Claude Code drives its own tool-calling loop; events are yielded in real time
+        so callers can post progress updates.
+        """
+        model_id = self._resolve_model(model or self.default_model)
+        cmd = [self.claude_bin, "--print", prompt, "--output-format", "stream-json"]
+        if model_id:
+            cmd += ["--model", model_id]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        timed_out = False
+        deadline = asyncio.get_event_loop().time() + self.stream_timeout
+
+        try:
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    line = await asyncio.wait_for(
+                        proc.stdout.readline(),
+                        timeout=min(remaining, 60.0),
+                    )
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    break
+                if not line:
+                    break
+                decoded = line.decode("utf-8", errors="replace").strip()
+                if decoded:
+                    try:
+                        yield json.loads(decoded)
+                    except json.JSONDecodeError:
+                        pass
+        finally:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+
+        if timed_out:
+            yield {
+                "type": "result",
+                "result": f"Error: claude CLI timed out after {self.stream_timeout}s.",
+                "is_error": True,
+            }
 
 
 def _build_prompt(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> str:

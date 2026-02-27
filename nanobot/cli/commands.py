@@ -447,6 +447,21 @@ def gateway(
         try:
             await cron.start()
             await heartbeat.start()
+
+            # Report any tasks that were running when the gateway last died
+            from nanobot.agent.background import TaskRegistry
+            from nanobot.bus.events import OutboundMessage as _OM
+            _task_registry = TaskRegistry(config.workspace_path / "tasks")
+            for _stale in _task_registry.drain_stale():
+                await bus.publish_outbound(_OM(
+                    channel=_stale.channel,
+                    chat_id=_stale.chat_id,
+                    content=(
+                        f"⚠️ I restarted while working on: \"{_stale.prompt_preview}\"\n"
+                        "Please re-send if you'd like me to continue."
+                    ),
+                ))
+
             health.mark_started(
                 channels=list(channels.enabled_channels),
                 heartbeat_interval_s=hb_cfg.interval_s if hb_cfg.enabled else None,

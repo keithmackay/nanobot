@@ -107,7 +107,7 @@ class AgentLoop:
         self._consolidation_tasks: set[asyncio.Task] = set()  # Strong refs to in-flight tasks
         self._consolidation_locks: dict[str, asyncio.Lock] = {}
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
-        self._processing_lock = asyncio.Lock()
+        self._session_locks: dict[str, asyncio.Lock] = {}  # per-session serialisation
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -279,20 +279,95 @@ class AgentLoop:
             channel=msg.channel, chat_id=msg.chat_id, content=content,
         ))
 
+    def _should_run_background(self, msg: InboundMessage) -> bool:
+        """True when this message should run as a fire-and-forget background task."""
+        from nanobot.providers.claude_cli_provider import ClaudeCliProvider
+        return (
+            isinstance(self.provider, ClaudeCliProvider)
+            and msg.channel not in ("cli", "system")
+            and not msg.content.strip().startswith("/")
+        )
+
+    async def _dispatch_background(self, msg: InboundMessage) -> None:
+        """Send immediate ACK and run task in background (outside session lock)."""
+        from nanobot.agent.background import TaskRegistry, run_background_task
+        from nanobot.providers.claude_cli_provider import ClaudeCliProvider, _build_prompt
+
+        provider = self.provider  # type: ClaudeCliProvider
+
+        # Fetch claude-mem context before building messages
+        persistent_context: str | None = None
+        if self.claude_mem:
+            asyncio.create_task(self.claude_mem.log_turn(msg.session_key, msg.content))
+            persistent_context = await self.claude_mem.get_context()
+
+        session = self.sessions.get_or_create(msg.session_key)
+        history = session.get_history(max_messages=self.memory_window)
+        messages = self.context.build_messages(
+            history=history,
+            current_message=msg.content,
+            media=msg.media if msg.media else None,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            persistent_context=persistent_context,
+        )
+
+        # Build prompt WITHOUT nanobot tool injection — Claude Code uses its own native tools
+        prompt = _build_prompt(messages, tools=None)
+
+        # Save the inbound turn to session history so context accumulates
+        session.messages.append({
+            "role": "user",
+            "content": msg.content,
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+        })
+        self.sessions.save(session)
+
+        registry = TaskRegistry(self.workspace / "tasks")
+        record = registry.create(msg.channel, msg.chat_id, msg.content)
+
+        reply_to = (msg.metadata or {}).get("message_id")
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="⚙️ On it — I'll update you as I work.",
+            metadata={"reply_to": reply_to} if reply_to else {},
+        ))
+
+        model = self.model
+
+        async def _stream():
+            async for event in provider.run_task_streaming(prompt, model):
+                yield event
+
+        asyncio.create_task(run_background_task(
+            task_id=record.id,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            bus=self.bus,
+            registry=registry,
+            stream_fn=_stream,
+            reply_to=reply_to,
+        ))
+
     async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message under the global lock."""
-        async with self._processing_lock:
+        """Process a message under a per-session lock."""
+        lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
+        async with lock:
             if self.health_service:
                 self.health_service.mark_agent_turn(channel=msg.channel, chat_id=msg.chat_id)
             try:
-                response = await self._process_message(msg)
-                if response is not None:
-                    await self.bus.publish_outbound(response)
-                elif msg.channel == "cli":
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel, chat_id=msg.chat_id,
-                        content="", metadata=msg.metadata or {},
-                    ))
+                if self._should_run_background(msg):
+                    await self._dispatch_background(msg)
+                else:
+                    response = await self._process_message(msg)
+                    if response is not None:
+                        await self.bus.publish_outbound(response)
+                    elif msg.channel == "cli":
+                        await self.bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel, chat_id=msg.chat_id,
+                            content="", metadata=msg.metadata or {},
+                        ))
             except asyncio.CancelledError:
                 logger.info("Task cancelled for session {}", msg.session_key)
                 raise
