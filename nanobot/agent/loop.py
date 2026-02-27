@@ -62,9 +62,11 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        claude_mem: Any | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
+        self.claude_mem = claude_mem
         self.channels_config = channels_config
         self.provider = provider
         self.workspace = workspace
@@ -403,12 +405,19 @@ class AgentLoop:
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
 
+        # Log turn to claude-mem (fire-and-forget) and fetch recent context
+        persistent_context: str | None = None
+        if self.claude_mem:
+            asyncio.create_task(self.claude_mem.log_turn(key, msg.content))
+            persistent_context = await self.claude_mem.get_context()
+
         history = session.get_history(max_messages=self.memory_window)
         initial_messages = self.context.build_messages(
             history=history,
             current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel, chat_id=msg.chat_id,
+            persistent_context=persistent_context,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:

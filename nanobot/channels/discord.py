@@ -12,7 +12,7 @@ from loguru import logger
 from nanobot.bus.events import OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.channels.base import BaseChannel
-from nanobot.config.schema import DiscordConfig
+from nanobot.config.schema import DiscordConfig, DiscordGuildConfig
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -231,7 +231,8 @@ class DiscordChannel(BaseChannel):
         if not sender_id or not channel_id:
             return
 
-        if not self.is_allowed(sender_id):
+        guild_id = str(payload.get("guild_id") or "")
+        if not self._is_allowed_guild(sender_id, guild_id, channel_id, content):
             return
 
         content_parts = [content] if content else []
@@ -274,6 +275,46 @@ class DiscordChannel(BaseChannel):
                 "reply_to": reply_to,
             },
         )
+
+    def _is_allowed_guild(
+        self, sender_id: str, guild_id: str, channel_id: str, content: str
+    ) -> bool:
+        """Check whether this message is allowed given guild/channel/user config.
+
+        Logic:
+        - DMs (no guild_id): fall back to global allow_from list.
+        - Guild message with guilds config: must match guild, channel, and user allowlists.
+        - Guild message without guilds config: fall back to global allow_from.
+        """
+        if not guild_id:
+            # Direct message — use global allowFrom
+            return self.is_allowed(sender_id)
+
+        if self.config.guilds:
+            guild_cfg = self.config.guilds.get(guild_id)
+            if guild_cfg is None:
+                return False  # Guild not in allowlist
+
+            # Channel allowlist: if any channels are configured, the message channel must be listed and allowed
+            if guild_cfg.channels:
+                rule = guild_cfg.channels.get(channel_id)
+                if rule is None or not rule.allow:
+                    return False
+
+            # Per-guild user allowlist (empty = allow all guild members)
+            if guild_cfg.users and sender_id not in guild_cfg.users:
+                return False
+
+            # Require mention check
+            if guild_cfg.require_mention:
+                bot_mention_pattern = "<@"
+                if bot_mention_pattern not in content:
+                    return False
+
+            return True
+
+        # No guilds config — fall back to global allow_from
+        return self.is_allowed(sender_id)
 
     async def _start_typing(self, channel_id: str) -> None:
         """Start periodic typing indicator for a channel."""

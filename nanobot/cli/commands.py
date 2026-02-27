@@ -305,11 +305,17 @@ def gateway(
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
-    
+
+    # claude-mem integration
+    claude_mem = None
+    if config.claude_mem.enabled:
+        from nanobot.agent.claudemem import ClaudeMemClient
+        claude_mem = ClaudeMemClient(url=config.claude_mem.url, project=config.claude_mem.project)
+
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
-    
+
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
@@ -327,6 +333,7 @@ def gateway(
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
         channels_config=config.channels,
+        claude_mem=claude_mem,
     )
     
     # Set cron callback (needs agent)

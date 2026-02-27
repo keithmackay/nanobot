@@ -53,14 +53,29 @@ class DingTalkConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed staff_ids
 
 
+class DiscordChannelRule(Base):
+    """Per-channel allow/deny rule within a Discord guild."""
+
+    allow: bool = True
+
+
+class DiscordGuildConfig(Base):
+    """Per-guild Discord configuration (mirrors OpenClaw guild allowlists)."""
+
+    require_mention: bool = False  # Require @bot mention to respond
+    users: list[str] = Field(default_factory=list)  # Allowed user IDs (empty = all guild members)
+    channels: dict[str, DiscordChannelRule] = Field(default_factory=dict)  # channel_id -> rule
+
+
 class DiscordConfig(Base):
     """Discord channel configuration."""
 
     enabled: bool = False
     token: str = ""  # Bot token from Discord Developer Portal
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs
+    allow_from: list[str] = Field(default_factory=list)  # Global user allowlist (DMs + unguilded)
     gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
     intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
+    guilds: dict[str, DiscordGuildConfig] = Field(default_factory=dict)  # guild_id -> config
 
 
 class MatrixConfig(Base):
@@ -250,6 +265,14 @@ class ProvidersConfig(Base):
     claude_cli: ProviderConfig = Field(default_factory=ProviderConfig)  # Claude CLI (local subscription)
 
 
+class ClaudeMemConfig(Base):
+    """claude-mem integration configuration."""
+
+    enabled: bool = True
+    url: str = "http://127.0.0.1:37777"
+    project: str = "nanobot"
+
+
 class HeartbeatConfig(Base):
     """Heartbeat service configuration."""
 
@@ -314,6 +337,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    claude_mem: ClaudeMemConfig = Field(default_factory=ClaudeMemConfig)
 
     @property
     def workspace_path(self) -> Path:
