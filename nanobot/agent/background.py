@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from nanobot.bus.queue import MessageBus
 
 # How often to post "still working" status updates
-_STATUS_INTERVAL_S = 180  # 3 minutes
+_STATUS_INTERVAL_S = 60  # 1 minute
 
 
 @dataclass
