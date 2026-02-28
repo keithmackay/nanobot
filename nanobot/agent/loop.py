@@ -65,11 +65,13 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         claude_mem: Any | None = None,
         health_service: HealthService | None = None,
+        personalities: dict | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
         self.claude_mem = claude_mem
         self.channels_config = channels_config
+        self.personalities = personalities or {}
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
@@ -492,6 +494,9 @@ class AgentLoop:
             asyncio.create_task(self.claude_mem.log_turn(key, msg.content))
             persistent_context = await self.claude_mem.get_context()
 
+        personality = (msg.metadata or {}).get("personality")
+        personality_config = self.personalities.get(personality) if personality else None
+
         history = session.get_history(max_messages=self.memory_window)
         initial_messages = self.context.build_messages(
             history=history,
@@ -500,6 +505,8 @@ class AgentLoop:
             channel=msg.channel, chat_id=msg.chat_id,
             message_id=(msg.metadata or {}).get("message_id"),
             persistent_context=persistent_context,
+            personality=personality,
+            personality_config=personality_config,
         )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:

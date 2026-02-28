@@ -98,17 +98,29 @@ class SkillsLoader:
         
         return "\n\n---\n\n".join(parts) if parts else ""
     
-    def build_skills_summary(self) -> str:
+    def build_skills_summary(
+        self,
+        allowed_skills: list[str] | None = None,
+        denied_skills: list[str] | None = None,
+    ) -> str:
         """
         Build a summary of all skills (name, description, path, availability).
         
         This is used for progressive loading - the agent can read the full
         skill content using read_file when needed.
         
+        Args:
+            allowed_skills: If non-empty, only include skills in this list.
+            denied_skills: Always exclude skills in this list.
+        
         Returns:
             XML-formatted skills summary.
         """
         all_skills = self.list_skills(filter_unavailable=False)
+        if allowed_skills:
+            all_skills = [s for s in all_skills if s["name"] in allowed_skills]
+        if denied_skills:
+            all_skills = [s for s in all_skills if s["name"] not in denied_skills]
         if not all_skills:
             return ""
         
@@ -190,10 +202,23 @@ class SkillsLoader:
         meta = self.get_skill_metadata(name) or {}
         return self._parse_nanobot_metadata(meta.get("metadata", ""))
     
-    def get_always_skills(self) -> list[str]:
-        """Get skills marked as always=true that meet requirements."""
+    def get_always_skills(
+        self,
+        allowed_skills: list[str] | None = None,
+        denied_skills: list[str] | None = None,
+    ) -> list[str]:
+        """Get skills marked as always=true that meet requirements.
+        
+        Args:
+            allowed_skills: If non-empty, only return skills in this list.
+            denied_skills: Always exclude skills in this list.
+        """
         result = []
         for s in self.list_skills(filter_unavailable=True):
+            if allowed_skills and s["name"] not in allowed_skills:
+                continue
+            if denied_skills and s["name"] in denied_skills:
+                continue
             meta = self.get_skill_metadata(s["name"]) or {}
             skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
             if skill_meta.get("always") or meta.get("always"):

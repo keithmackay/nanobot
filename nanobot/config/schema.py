@@ -54,10 +54,21 @@ class DingTalkConfig(Base):
     allow_from: list[str] = Field(default_factory=list)  # Allowed staff_ids
 
 
+class PersonalityConfig(Base):
+    """Configuration for a named personality (channel-level behavior customization)."""
+
+    description: str = ""  # Human-readable description
+    allowed_skills: list[str] = Field(default_factory=list)  # Empty = all skills; non-empty = only these
+    denied_skills: list[str] = Field(default_factory=list)   # Always exclude these skills
+    model: str | None = None        # Override LLM model for this personality
+    temperature: float | None = None  # Override temperature for this personality
+
+
 class DiscordChannelRule(Base):
     """Per-channel allow/deny rule within a Discord guild."""
 
     allow: bool = True
+    personality: str | None = None  # Personality name for this specific channel (overrides guild default)
 
 
 class DiscordGuildConfig(Base):
@@ -66,6 +77,7 @@ class DiscordGuildConfig(Base):
     require_mention: bool = False  # Require @bot mention to respond
     users: list[str] = Field(default_factory=list)  # Allowed user IDs (empty = all guild members)
     channels: dict[str, DiscordChannelRule] = Field(default_factory=dict)  # channel_id -> rule
+    personality: str | None = None  # Default personality for all channels in this guild
 
 
 class DiscordConfig(Base):
@@ -341,6 +353,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     claude_mem: ClaudeMemConfig = Field(default_factory=ClaudeMemConfig)
+    personalities: dict[str, PersonalityConfig] = Field(default_factory=dict)  # Named personality configs
 
     @property
     def workspace_path(self) -> Path:

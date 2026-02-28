@@ -6,10 +6,13 @@ import platform
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
+
+if TYPE_CHECKING:
+    from nanobot.config.schema import PersonalityConfig
 
 
 class ContextBuilder:
@@ -27,11 +30,18 @@ class ContextBuilder:
         self,
         skill_names: list[str] | None = None,
         persistent_context: str | None = None,
+        personality: str | None = None,
+        personality_config: "PersonalityConfig | None" = None,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+        
+        Args:
+            personality: Name of the active personality (determines SOUL.md to load).
+            personality_config: PersonalityConfig for skill filtering and overrides.
+        """
         parts = [self._get_identity()]
 
-        bootstrap = self._load_bootstrap_files()
+        bootstrap = self._load_bootstrap_files(personality=personality)
         if bootstrap:
             parts.append(bootstrap)
 
@@ -42,13 +52,22 @@ class ContextBuilder:
         if persistent_context:
             parts.append(f"# Recent Conversation History (claude-mem)\n\n{persistent_context}")
 
-        always_skills = self.skills.get_always_skills()
+        allowed_skills = personality_config.allowed_skills if personality_config else []
+        denied_skills = personality_config.denied_skills if personality_config else []
+
+        always_skills = self.skills.get_always_skills(
+            allowed_skills=allowed_skills or None,
+            denied_skills=denied_skills or None,
+        )
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        skills_summary = self.skills.build_skills_summary()
+        skills_summary = self.skills.build_skills_summary(
+            allowed_skills=allowed_skills or None,
+            denied_skills=denied_skills or None,
+        )
         if skills_summary:
             parts.append(f"""# Skills
 
@@ -105,15 +124,24 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             lines.append(f"Message ID: {message_id}")
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
     
-    def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
+    def _load_bootstrap_files(self, personality: str | None = None) -> str:
+        """Load all bootstrap files from workspace.
+        
+        For SOUL.md, if a personality is specified and its file exists at
+        workspace/personalities/{personality}/SOUL.md, that file is used instead.
+        """
         parts = []
         
         for filename in self.BOOTSTRAP_FILES:
             file_path = self.workspace / filename
+            # Personality-specific SOUL.md takes precedence over the default
+            if filename == "SOUL.md" and personality:
+                personality_soul = self.workspace / "personalities" / personality / "SOUL.md"
+                if personality_soul.exists():
+                    file_path = personality_soul
             if file_path.exists():
-                content = file_path.read_text(encoding="utf-8")
-                parts.append(f"## {filename}\n\n{content}")
+                file_content = file_path.read_text(encoding="utf-8")
+                parts.append(f"## {filename}\n\n{file_content}")
         
         return "\n\n".join(parts) if parts else ""
     
@@ -127,10 +155,14 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         chat_id: str | None = None,
         message_id: str | None = None,
         persistent_context: str | None = None,
+        personality: str | None = None,
+        personality_config: "PersonalityConfig | None" = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names, persistent_context)},
+            {"role": "system", "content": self.build_system_prompt(
+                skill_names, persistent_context, personality, personality_config
+            )},
             *history,
             {"role": "user", "content": self._build_runtime_context(channel, chat_id, message_id)},
             {"role": "user", "content": self._build_user_content(current_message, media)},

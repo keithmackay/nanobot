@@ -283,6 +283,8 @@ class DiscordChannel(BaseChannel):
 
         await self._start_typing(channel_id)
 
+        personality = self._get_channel_personality(guild_id, channel_id)
+
         await self._handle_message(
             sender_id=sender_id,
             chat_id=channel_id,
@@ -292,8 +294,22 @@ class DiscordChannel(BaseChannel):
                 "message_id": str(payload.get("id", "")),
                 "guild_id": payload.get("guild_id"),
                 "reply_to": reply_to,
+                "personality": personality,
             },
         )
+
+    def _get_channel_personality(self, guild_id: str, channel_id: str) -> str | None:
+        """Return the personality name for a guild/channel, or None for default."""
+        if not guild_id or not self.config.guilds:
+            return None
+        guild_cfg = self.config.guilds.get(guild_id)
+        if not guild_cfg:
+            return None
+        # Channel-level personality takes precedence over guild default
+        channel_rule = guild_cfg.channels.get(channel_id)
+        if channel_rule and channel_rule.personality:
+            return channel_rule.personality
+        return guild_cfg.personality
 
     def _is_allowed_guild(
         self, sender_id: str, guild_id: str, channel_id: str, content: str
