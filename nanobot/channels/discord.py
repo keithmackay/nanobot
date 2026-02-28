@@ -19,6 +19,17 @@ DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
 
+# Close codes that indicate a non-recoverable auth/config error — do not reconnect.
+_FATAL_CLOSE_CODES = {
+    4004,  # Authentication failed
+    4010,  # Invalid shard
+    4011,  # Sharding required
+    4012,  # Invalid API version
+    4013,  # Invalid intents
+    4014,  # Disallowed intents
+}
+_MAX_RECONNECT_ATTEMPTS = 50
+
 
 def _split_message(content: str, max_len: int = MAX_MESSAGE_LEN) -> list[str]:
     """Split content into chunks within max_len, preferring line breaks."""
@@ -65,19 +76,45 @@ class DiscordChannel(BaseChannel):
         self._running = True
         self._http = httpx.AsyncClient(timeout=30.0)
 
+        attempt = 0
         while self._running:
             try:
-                logger.info("Connecting to Discord gateway...")
+                logger.info("Connecting to Discord gateway... (attempt {})", attempt + 1)
                 async with websockets.connect(self.config.gateway_url) as ws:
                     self._ws = ws
+                    attempt = 0  # Reset on successful connection
                     await self._gateway_loop()
             except asyncio.CancelledError:
                 break
+            except websockets.exceptions.ConnectionClosedError as e:
+                code = e.code if hasattr(e, "code") else None
+                if code in _FATAL_CLOSE_CODES:
+                    logger.error(
+                        "Discord gateway closed with fatal code {} — "
+                        "check bot token and intents. Not reconnecting.",
+                        code,
+                    )
+                    self._running = False
+                    break
+                logger.warning("Discord gateway connection closed (code={}): {}", code, e)
             except Exception as e:
                 logger.warning("Discord gateway error: {}", e)
-                if self._running:
-                    logger.info("Reconnecting to Discord gateway in 5 seconds...")
-                    await asyncio.sleep(5)
+
+            if not self._running:
+                break
+
+            attempt += 1
+            if attempt >= _MAX_RECONNECT_ATTEMPTS:
+                logger.error(
+                    "Discord gateway: reached max reconnect attempts ({}). Giving up.",
+                    _MAX_RECONNECT_ATTEMPTS,
+                )
+                self._running = False
+                break
+
+            delay = min(5 * (2 ** min(attempt - 1, 5)), 300)  # 5s, 10s, 20s … cap at 300s
+            logger.info("Reconnecting to Discord gateway in {}s (attempt {}/{})", delay, attempt, _MAX_RECONNECT_ATTEMPTS)
+            await asyncio.sleep(delay)
 
     async def stop(self) -> None:
         """Stop the Discord channel."""

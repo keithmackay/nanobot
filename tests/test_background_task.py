@@ -94,11 +94,11 @@ def test_event_to_activity_text():
 def test_event_to_activity_truncates_long_text():
     event = {
         "type": "assistant",
-        "message": {"content": [{"type": "text", "text": "x" * 100}]},
+        "message": {"content": [{"type": "text", "text": "x" * 600}]},
     }
     result = _event_to_activity(event)
     assert result is not None
-    assert len(result) <= 83  # 80 + "…"
+    assert len(result) <= 501  # 500 + "…"
 
 
 def test_event_to_activity_non_assistant():
