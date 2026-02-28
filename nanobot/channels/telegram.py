@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 from loguru import logger
-from telegram import BotCommand, Update, ReplyParameters
+from telegram import BotCommand, Update, ReplyParameters, ReactionTypeEmoji
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 
@@ -400,6 +400,9 @@ class TelegramChannel(BaseChannel):
         
         str_chat_id = str(chat_id)
         
+        # React with acknowledgment emoji before processing
+        asyncio.create_task(self._react(str_chat_id, message.message_id, self.config.react_emoji))
+        
         # Start typing indicator before processing
         self._start_typing(str_chat_id)
         
@@ -418,6 +421,20 @@ class TelegramChannel(BaseChannel):
             }
         )
     
+
+    async def _react(self, chat_id: str, message_id: int, emoji: str) -> None:
+        """Add an emoji reaction to a message (best-effort)."""
+        if not self._app:
+            return
+        try:
+            await self._app.bot.set_message_reaction(
+                chat_id=int(chat_id),
+                message_id=message_id,
+                reaction=[ReactionTypeEmoji(emoji=emoji)],
+            )
+        except Exception as e:
+            logger.debug("Telegram reaction failed for {}/{}: {}", chat_id, message_id, e)
+
     def _start_typing(self, chat_id: str) -> None:
         """Start sending 'typing...' indicator for a chat."""
         # Cancel any existing typing task for this chat

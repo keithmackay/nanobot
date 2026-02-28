@@ -332,15 +332,8 @@ class AgentLoop:
             "background task {} starting for {}:{} prompt={!r}",
             record.id, msg.channel, msg.chat_id, msg.content[:80],
         )
-        # Discord acknowledges via emoji reaction (added by DiscordChannel on receipt).
-        # For other channels, send a text ACK.
-        if msg.channel != "discord":
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="⚙️ On it — I'll update you as I work.",
-                metadata={"reply_to": reply_to} if reply_to else {},
-            ))
+        # Discord, Telegram, and Slack acknowledge via emoji reaction on receipt.
+        # No text ACK needed for these channels.
 
         model = self.model
 
