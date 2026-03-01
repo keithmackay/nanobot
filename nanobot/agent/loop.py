@@ -260,6 +260,8 @@ class AgentLoop:
 
             if msg.content.strip().lower() == "/stop":
                 await self._handle_stop(msg)
+            elif re.match(r'^new(?:\s+topic)?:\s*', msg.content.strip(), re.IGNORECASE):
+                await self._handle_new_session(msg)
             else:
                 task = asyncio.create_task(self._dispatch(msg))
                 self._active_tasks.setdefault(msg.session_key, []).append(task)
@@ -280,6 +282,36 @@ class AgentLoop:
         await self.bus.publish_outbound(OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=content,
         ))
+
+    async def _handle_new_session(self, msg: InboundMessage) -> None:
+        """Clear session history and process remaining content as a fresh start."""
+        stripped = re.sub(r'^new(?:\s+topic)?:\s*', '', msg.content.strip(), flags=re.IGNORECASE)
+
+        session = self.sessions.get_or_create(msg.session_key)
+        session.clear()
+        self.sessions.save(session)
+        logger.info("Session {} reset via 'new:' prefix", msg.session_key)
+
+        if stripped:
+            new_msg = InboundMessage(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                content=stripped,
+                media=msg.media,
+                metadata=msg.metadata,
+                session_key_override=msg.session_key_override,
+            )
+            task = asyncio.create_task(self._dispatch(new_msg))
+            self._active_tasks.setdefault(new_msg.session_key, []).append(task)
+            task.add_done_callback(
+                lambda t, k=new_msg.session_key: self._active_tasks.get(k, []) and self._active_tasks[k].remove(t) if t in self._active_tasks.get(k, []) else None
+            )
+        else:
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content="🔄 Session cleared. Fresh start!",
+            ))
 
     def _should_run_background(self, msg: InboundMessage) -> bool:
         """True when this message should run as a fire-and-forget background task."""
