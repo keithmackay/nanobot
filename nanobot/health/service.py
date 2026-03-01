@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +59,12 @@ class HealthService:
         self._heartbeat_interval_s: int | None = None
         self._cron_job_count: int = 0
 
+        # Sidecar services to health-check (name -> url)
+        self._sidecars: dict[str, str] = {
+            "snugban": "http://localhost:7420/api/tasks",
+        }
+        self._sidecar_status: dict[str, dict] = {}
+
         self._running = False
         self._task: asyncio.Task | None = None
 
@@ -74,6 +82,7 @@ class HealthService:
         self._channels_enabled = list(channels)
         self._heartbeat_interval_s = heartbeat_interval_s
         self._cron_job_count = cron_job_count
+        self._check_sidecars()
         self._write_snapshot()
 
     def mark_agent_turn(self, channel: str = "", chat_id: str = "") -> None:
@@ -96,6 +105,30 @@ class HealthService:
 
     def update_channels(self, channels: list[str]) -> None:
         self._channels_enabled = list(channels)
+
+    # ------------------------------------------------------------------
+    # Sidecar service checks
+    # ------------------------------------------------------------------
+
+    def _check_sidecars(self) -> None:
+        """Ping each registered sidecar service and update status."""
+        for name, url in self._sidecars.items():
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=2) as resp:
+                    self._sidecar_status[name] = {
+                        "ok": resp.status == 200,
+                        "status_code": resp.status,
+                        "checked_at_ms": _now_ms(),
+                        "error": None,
+                    }
+            except Exception as exc:
+                self._sidecar_status[name] = {
+                    "ok": False,
+                    "status_code": None,
+                    "checked_at_ms": _now_ms(),
+                    "error": str(exc),
+                }
 
     # ------------------------------------------------------------------
     # Snapshot
@@ -144,6 +177,7 @@ class HealthService:
                 "last_job": self._last_cron_job,
             },
             "channels": channel_health,
+            "sidecars": dict(self._sidecar_status),
         }
 
     def _write_snapshot(self) -> None:
@@ -180,6 +214,7 @@ class HealthService:
                 await asyncio.sleep(self.snapshot_interval_s)
                 if not self._running:
                     break
+                self._check_sidecars()
                 snap = self.get_snapshot()
                 self._write_snapshot()
                 if snap.get("stale"):
