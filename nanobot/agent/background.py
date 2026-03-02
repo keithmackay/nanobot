@@ -126,10 +126,12 @@ async def run_background_task(
     result_text: str | None = None
     is_error = False
 
-    async def post(content: str) -> None:
+    async def post(content: str, keep_typing: bool = False) -> None:
         meta: dict = {}
         if reply_to:
             meta["reply_to"] = reply_to
+        if keep_typing:
+            meta["_keep_typing"] = True
         await bus.publish_outbound(OutboundMessage(
             channel=channel, chat_id=chat_id, content=content, metadata=meta,
         ))
@@ -154,7 +156,7 @@ async def run_background_task(
                 elapsed_s = int(now - started)
                 mins, secs = divmod(elapsed_s, 60)
                 elapsed_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-                await post(f"⏳ Still working… ({elapsed_str} elapsed)\n`{last_activity}`")
+                await post(f"⏳ Still working… ({elapsed_str} elapsed)\n`{last_activity}`", keep_typing=True)
                 last_status_at = now
 
     except asyncio.CancelledError:

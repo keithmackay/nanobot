@@ -141,6 +141,7 @@ class DiscordChannel(BaseChannel):
         url = f"{DISCORD_API_BASE}/channels/{msg.chat_id}/messages"
         headers = {"Authorization": f"Bot {self.config.token}"}
 
+        keep_typing = bool((msg.metadata or {}).get("_keep_typing"))
         try:
             chunks = _split_message(msg.content or "")
             if not chunks:
@@ -157,7 +158,11 @@ class DiscordChannel(BaseChannel):
                 if not await self._send_payload(url, headers, payload):
                     break  # Abort remaining chunks on failure
         finally:
-            await self._stop_typing(msg.chat_id)
+            if keep_typing:
+                # Intermediate status message — restart typing so the indicator continues
+                await self._start_typing(msg.chat_id)
+            else:
+                await self._stop_typing(msg.chat_id)
 
     async def _send_payload(
         self, url: str, headers: dict[str, str], payload: dict[str, Any]
