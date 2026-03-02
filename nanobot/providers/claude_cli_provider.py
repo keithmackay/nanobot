@@ -47,12 +47,14 @@ class ClaudeCliProvider(LLMProvider):
         claude_bin: str = "claude",
         timeout: int = 300,
         stream_timeout: int = 900,  # 15 min for long-running background tasks
+        max_turns: int = 30,
     ):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
         self.claude_bin = claude_bin
         self.timeout = timeout
         self.stream_timeout = stream_timeout
+        self.max_turns = max_turns
 
     def _resolve_model(self, model: str) -> str:
         """Strip claude-cli/ prefix and map shorthand names to full model IDs."""
@@ -89,7 +91,12 @@ class ClaudeCliProvider(LLMProvider):
         return _parse_response(raw, tools)
 
     def _run(self, prompt: str, model_id: str) -> str:
-        cmd = [self.claude_bin, "--print", prompt, "--output-format", "json"]
+        cmd = [
+            self.claude_bin, "--print", prompt,
+            "--output-format", "json",
+            "--dangerously-skip-permissions",
+            "--max-turns", str(self.max_turns),
+        ]
         if model_id:
             cmd += ["--model", model_id]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
@@ -116,7 +123,12 @@ class ClaudeCliProvider(LLMProvider):
         event was emitted, an error result event is synthesised from the stderr output.
         """
         model_id = self._resolve_model(model or self.default_model)
-        cmd = [self.claude_bin, "--print", "--verbose", prompt, "--output-format", "stream-json"]
+        cmd = [
+            self.claude_bin, "--print", "--verbose", prompt,
+            "--output-format", "stream-json",
+            "--dangerously-skip-permissions",
+            "--max-turns", str(self.max_turns),
+        ]
         if model_id:
             cmd += ["--model", model_id]
 

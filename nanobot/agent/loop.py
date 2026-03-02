@@ -350,6 +350,14 @@ class AgentLoop:
         # Build prompt WITHOUT nanobot tool injection — Claude Code uses its own native tools
         prompt = _build_prompt(messages, tools=None)
 
+        # Prepend a task-decomposition hint so Claude Code breaks long work into steps
+        _DECOMP_HINT = (
+            "[Task guidance] For multi-step tasks: plan first, then execute one step at a time."
+            " Complete each step fully before starting the next. Prefer incremental progress"
+            " over long uninterrupted tool-call chains.\n\n"
+        )
+        prompt = _DECOMP_HINT + prompt
+
         # Save the inbound turn to session history so context accumulates
         session.messages.append({
             "role": "user",
