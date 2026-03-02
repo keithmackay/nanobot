@@ -130,7 +130,8 @@ class ClaudeCliProvider(LLMProvider):
 
         timed_out = False
         got_result_event = False
-        deadline = asyncio.get_event_loop().time() + self.stream_timeout
+        start_time = asyncio.get_event_loop().time()
+        deadline = start_time + self.stream_timeout
 
         # Collect stderr lines concurrently so the pipe never blocks stdout.
         stderr_lines: list[str] = []
@@ -160,8 +161,12 @@ class ClaudeCliProvider(LLMProvider):
                         timeout=min(remaining, 60.0),
                     )
                 except asyncio.TimeoutError:
-                    timed_out = True
-                    break
+                    # Per-readline 60s silence timeout — only a true timeout if the
+                    # overall deadline has also passed; otherwise keep waiting.
+                    if asyncio.get_event_loop().time() >= deadline:
+                        timed_out = True
+                        break
+                    continue
                 if not line:
                     break
                 decoded = line.decode("utf-8", errors="replace").strip()
@@ -190,9 +195,10 @@ class ClaudeCliProvider(LLMProvider):
         )
 
         if timed_out:
+            elapsed = int(asyncio.get_event_loop().time() - start_time)
             yield {
                 "type": "result",
-                "result": f"Error: claude CLI timed out after {self.stream_timeout}s.",
+                "result": f"Error: claude CLI timed out after {elapsed}s (limit {self.stream_timeout}s).",
                 "is_error": True,
             }
         elif returncode != 0 and not got_result_event:
