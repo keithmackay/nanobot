@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig
     from nanobot.cron.service import CronService
     from nanobot.health.service import HealthService
+    from nanobot.tasks.orchestrator import TaskOrchestrator
 
 
 class AgentLoop:
@@ -66,12 +67,14 @@ class AgentLoop:
         claude_mem: Any | None = None,
         health_service: HealthService | None = None,
         personalities: dict | None = None,
+        task_orchestrator: "TaskOrchestrator | None" = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
         self.claude_mem = claude_mem
         self.channels_config = channels_config
         self.personalities = personalities or {}
+        self.task_orchestrator = task_orchestrator
         self.provider = provider
         self.workspace = workspace
         self.model = model or provider.get_default_model()
@@ -262,6 +265,8 @@ class AgentLoop:
                 await self._handle_stop(msg)
             elif re.match(r'^new(?:\s+topic)?:\s*', msg.content.strip(), re.IGNORECASE):
                 await self._handle_new_session(msg)
+            elif self.task_orchestrator and self.task_orchestrator.is_task_message(msg.content):
+                asyncio.create_task(self.task_orchestrator.queue_task(msg))
             else:
                 task = asyncio.create_task(self._dispatch(msg))
                 self._active_tasks.setdefault(msg.session_key, []).append(task)

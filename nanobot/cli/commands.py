@@ -372,6 +372,24 @@ def gateway(
     )
     agent.health_service = health
 
+    # Create task orchestrator (requires ClaudeCliProvider for streaming)
+    task_orch = None
+    if config.tasks.enabled:
+        from nanobot.providers.claude_cli_provider import ClaudeCliProvider
+        from nanobot.tasks.db import TaskDB
+        from nanobot.tasks.orchestrator import TaskOrchestrator
+        if isinstance(provider, ClaudeCliProvider):
+            _task_db_path = Path(config.tasks.db_path).expanduser()
+            _task_model = config.tasks.model or config.agents.defaults.model
+            task_orch = TaskOrchestrator(
+                db=TaskDB(_task_db_path),
+                bus=bus,
+                provider=provider,
+                default_model=_task_model,
+                default_poll_interval_s=config.tasks.poll_interval_s,
+            )
+            agent.task_orchestrator = task_orch
+
     # Create channel manager
     channels = ChannelManager(config, bus)
 
@@ -448,6 +466,8 @@ def gateway(
         try:
             await cron.start()
             await heartbeat.start()
+            if task_orch:
+                await task_orch.start()
 
             # Report any tasks that were running when the gateway last died
             from nanobot.agent.background import TaskRegistry

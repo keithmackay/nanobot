@@ -288,6 +288,16 @@ class ClaudeMemConfig(Base):
     project: str = "nanobot"
 
 
+
+
+class TasksConfig(Base):
+    """Long-running task orchestration configuration."""
+
+    enabled: bool = True
+    analyze_complexity: bool = False  # If True, auto-detect long-running tasks beyond explicit prefix
+    poll_interval_s: int = 60         # Default status update interval; 0 = ACK + final result only
+    db_path: str = "~/.nanobot/tasks/tasks.db"  # SQLite task store path
+    model: str = ""                   # Default model override for tasks (empty = use main agent model)
 class HeartbeatConfig(Base):
     """Heartbeat service configuration."""
 
@@ -354,6 +364,7 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     claude_mem: ClaudeMemConfig = Field(default_factory=ClaudeMemConfig)
     personalities: dict[str, PersonalityConfig] = Field(default_factory=dict)  # Named personality configs
+    tasks: TasksConfig = Field(default_factory=TasksConfig)
 
     @property
     def workspace_path(self) -> Path:
