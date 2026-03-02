@@ -130,7 +130,8 @@ class ClaudeCliProvider(LLMProvider):
 
         timed_out = False
         got_result_event = False
-        start_time = asyncio.get_event_loop().time()
+        loop = asyncio.get_event_loop()
+        start_time = loop.time()
         deadline = start_time + self.stream_timeout
 
         # Collect stderr lines concurrently so the pipe never blocks stdout.
@@ -149,24 +150,33 @@ class ClaudeCliProvider(LLMProvider):
 
         stderr_task = asyncio.create_task(_drain_stderr())
 
+        # IMPORTANT: never cancel an in-flight readline() — cancelling a
+        # StreamReader coroutine corrupts its internal buffer, causing the
+        # next call to return b"" immediately (false EOF).  Instead, keep the
+        # same Task alive across loop iterations and use asyncio.wait() to
+        # poll it without cancelling.
+        pending_read: asyncio.Task[bytes] | None = None
+
         try:
             while True:
-                remaining = deadline - asyncio.get_event_loop().time()
+                remaining = deadline - loop.time()
                 if remaining <= 0:
                     timed_out = True
                     break
-                try:
-                    line = await asyncio.wait_for(
-                        proc.stdout.readline(),
-                        timeout=min(remaining, 60.0),
-                    )
-                except asyncio.TimeoutError:
-                    # Per-readline 60s silence timeout — only a true timeout if the
-                    # overall deadline has also passed; otherwise keep waiting.
-                    if asyncio.get_event_loop().time() >= deadline:
-                        timed_out = True
-                        break
+
+                if pending_read is None or pending_read.done():
+                    pending_read = asyncio.create_task(proc.stdout.readline())
+
+                done, _ = await asyncio.wait(
+                    {pending_read}, timeout=min(remaining, 60.0)
+                )
+
+                if not done:
+                    # Still waiting — loop back to recheck deadline
                     continue
+
+                line = pending_read.result()
+                pending_read = None
                 if not line:
                     break
                 decoded = line.decode("utf-8", errors="replace").strip()
@@ -179,6 +189,12 @@ class ClaudeCliProvider(LLMProvider):
                     except json.JSONDecodeError:
                         pass
         finally:
+            if pending_read and not pending_read.done():
+                pending_read.cancel()
+                try:
+                    await pending_read
+                except (asyncio.CancelledError, Exception):
+                    pass
             try:
                 proc.kill()
             except ProcessLookupError:
