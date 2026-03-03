@@ -116,6 +116,7 @@ async def run_background_task(
     registry: TaskRegistry,
     stream_fn: Callable[[], AsyncGenerator[dict, None]],
     reply_to: str | None = None,
+    on_complete: Callable[[str], None] | None = None,
 ) -> None:
     """Run a streaming task, posting periodic status updates and final result to channel."""
     from nanobot.bus.events import OutboundMessage
@@ -174,5 +175,10 @@ async def run_background_task(
     if result_text:
         prefix = "❌ " if is_error else ""
         await post(f"{prefix}{result_text}")
+        if on_complete and not is_error:
+            try:
+                await on_complete(result_text)
+            except Exception:
+                pass
     else:
         await post("✓ Task completed.")

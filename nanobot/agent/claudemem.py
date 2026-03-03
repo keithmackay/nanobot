@@ -59,12 +59,21 @@ class ClaudeMemClient:
         self._available = available
         return available
 
-    async def log_turn(self, session_id: str, prompt: str) -> None:
-        """Register a new conversation turn with claude-mem (fire-and-forget)."""
-        await self._post("/api/sessions/init", {
+    async def log_turn(self, session_id: str, prompt: str) -> int | None:
+        """Register a new conversation turn with claude-mem. Returns promptNumber or None."""
+        result = await self._post("/api/sessions/init", {
             "claudeSessionId": session_id,
             "project": self.project,
             "prompt": prompt,
+        })
+        return result.get("promptNumber") if result else None
+
+    async def log_response(self, session_id: str, prompt_number: int, response_text: str) -> None:
+        """Log an assistant response for a session turn (fire-and-forget)."""
+        await self._post("/api/sessions/response", {
+            "claudeSessionId": session_id,
+            "promptNumber": prompt_number,
+            "responseText": response_text,
         })
 
     async def get_context(self) -> str | None:

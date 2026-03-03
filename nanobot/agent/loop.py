@@ -336,8 +336,9 @@ class AgentLoop:
 
         # Fetch claude-mem context before building messages
         persistent_context: str | None = None
+        bg_prompt_number: int | None = None
         if self.claude_mem:
-            asyncio.create_task(self.claude_mem.log_turn(msg.session_key, msg.content))
+            bg_prompt_number = await self.claude_mem.log_turn(msg.session_key, msg.content)
             persistent_context = await self.claude_mem.get_context()
 
         session = self.sessions.get_or_create(msg.session_key)
@@ -388,6 +389,14 @@ class AgentLoop:
             async for event in provider.run_task_streaming(prompt, model):
                 yield event
 
+        _cm = self.claude_mem
+        _session_key = msg.session_key
+        _pnum = bg_prompt_number
+
+        async def _log_bg_response(text: str) -> None:
+            if _cm and _pnum:
+                await _cm.log_response(_session_key, _pnum, text)
+
         asyncio.create_task(run_background_task(
             task_id=record.id,
             channel=msg.channel,
@@ -396,6 +405,7 @@ class AgentLoop:
             registry=registry,
             stream_fn=_stream,
             reply_to=reply_to,
+            on_complete=_log_bg_response,
         ))
 
     async def _dispatch(self, msg: InboundMessage) -> None:
@@ -535,8 +545,9 @@ class AgentLoop:
 
         # Log turn to claude-mem (fire-and-forget) and fetch recent context
         persistent_context: str | None = None
+        prompt_number: int | None = None
         if self.claude_mem:
-            asyncio.create_task(self.claude_mem.log_turn(key, msg.content))
+            prompt_number = await self.claude_mem.log_turn(key, msg.content)
             persistent_context = await self.claude_mem.get_context()
 
         personality = (msg.metadata or {}).get("personality")
@@ -571,6 +582,9 @@ class AgentLoop:
 
         self._save_turn(session, all_msgs, 1 + len(history))
         self.sessions.save(session)
+
+        if self.claude_mem and prompt_number and final_content:
+            asyncio.create_task(self.claude_mem.log_response(key, prompt_number, final_content))
 
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt._sent_in_turn:
             return None
