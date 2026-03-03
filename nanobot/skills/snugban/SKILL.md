@@ -31,7 +31,7 @@ curl -s http://localhost:7420/api/tasks
 ```
 
 Returns a JSON array of task objects. Each task has:
-- `id`, `project`, `task` (description), `status`, `channel`, `owner`, `model`, `source`, `created`, `updated`
+- `id`, `project`, `task` (description), `status`, `channel`, `owner`, `model`, `source`, `session_id`, `created`, `updated`
 
 Valid statuses: `Todo`, `In Progress`, `Blocked`, `Done`
 
@@ -124,7 +124,7 @@ curl -s -X POST http://localhost:7420/api/tasks \
 ```
 
 Required fields: `project`, `task`, `status`, `owner`
-Optional fields: `channel`, `model`, `source`
+Optional fields: `channel`, `model`, `source`, `session_id` (claude-code session ID if task runs in a named session)
 
 ## Update a task (e.g., move to In Progress)
 
