@@ -318,6 +318,24 @@ def gateway(
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
+    # Model router (optional)
+    model_router = None
+    if config.routing.enabled:
+        from nanobot.routing.router import ModelRouter
+        from nanobot.routing.metrics import RoutingMetrics
+        from pathlib import Path as _Path
+        _metrics_db = _Path(config.routing.db_path).expanduser()
+        _metrics = RoutingMetrics(_metrics_db)
+        model_router = ModelRouter(
+            provider=provider,
+            classifier_model=config.routing.classifier_model,
+            haiku_model=config.routing.haiku_model,
+            sonnet_model=config.routing.sonnet_model,
+            opus_model=config.routing.opus_model,
+            metrics=_metrics,
+        )
+        console.print(f"  Model routing enabled (classifier: {config.routing.classifier_model})")
+
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
@@ -337,17 +355,29 @@ def gateway(
         channels_config=config.channels,
         personalities={k: v for k, v in config.personalities.items()},
         claude_mem=claude_mem,
+        model_router=model_router,
     )
     
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
-        """Execute a cron job through the agent."""
-        response = await agent.process_direct(
-            job.payload.message,
-            session_key=f"cron:{job.id}",
-            channel=job.payload.channel or "cli",
-            chat_id=job.payload.to or "direct",
-        )
+        """Execute a cron job — shell command or agent turn."""
+        if job.payload.kind == "shell" and job.payload.cmd:
+            import asyncio as _asyncio
+            proc = await _asyncio.create_subprocess_shell(
+                job.payload.cmd,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await proc.communicate()
+            response = stdout.decode(errors="replace").strip()
+            logger.info("Shell cron job {!r} exit={} output={!r}", job.name, proc.returncode, response[:200])
+        else:
+            response = await agent.process_direct(
+                job.payload.message,
+                session_key=f"cron:{job.id}",
+                channel=job.payload.channel or "cli",
+                chat_id=job.payload.to or "direct",
+            )
         if job.payload.deliver and job.payload.to:
             from nanobot.bus.events import OutboundMessage
             await bus.publish_outbound(OutboundMessage(

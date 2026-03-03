@@ -290,6 +290,17 @@ class ClaudeMemConfig(Base):
 
 
 
+
+class RoutingConfig(Base):
+    """Model routing — haiku classifies each message to select the right tier."""
+
+    enabled: bool = False  # Master on/off switch
+    classifier_model: str = "anthropic/claude-haiku-4-5-20251001"
+    haiku_model: str = "anthropic/claude-haiku-4-5-20251001"
+    sonnet_model: str = "anthropic/claude-sonnet-4-6"
+    opus_model: str = "anthropic/claude-opus-4-6"
+    db_path: str = "~/.nanobot/routing/metrics.db"
+
 class TasksConfig(Base):
     """Long-running task orchestration configuration."""
 
@@ -365,6 +376,7 @@ class Config(BaseSettings):
     claude_mem: ClaudeMemConfig = Field(default_factory=ClaudeMemConfig)
     personalities: dict[str, PersonalityConfig] = Field(default_factory=dict)  # Named personality configs
     tasks: TasksConfig = Field(default_factory=TasksConfig)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)
 
     @property
     def workspace_path(self) -> Path:

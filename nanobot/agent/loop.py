@@ -28,6 +28,7 @@ from nanobot.session.manager import Session, SessionManager
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig
+    from nanobot.routing.router import ModelRouter
     from nanobot.cron.service import CronService
     from nanobot.health.service import HealthService
     from nanobot.tasks.orchestrator import TaskOrchestrator
@@ -68,6 +69,7 @@ class AgentLoop:
         health_service: HealthService | None = None,
         personalities: dict | None = None,
         task_orchestrator: "TaskOrchestrator | None" = None,
+        model_router: "ModelRouter | None" = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
@@ -103,6 +105,7 @@ class AgentLoop:
             restrict_to_workspace=restrict_to_workspace,
         )
 
+        self.model_router = model_router
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_stack: AsyncExitStack | None = None
@@ -516,7 +519,14 @@ class AgentLoop:
                                   content="New session started.")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/help — Show available commands")
+                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/routing-stats — Model routing stats\n/help — Show available commands")
+
+        if cmd == "/routing-stats":
+            if self.model_router is not None and self.model_router.metrics is not None:
+                stats_text = self.model_router.metrics.format_today()
+            else:
+                stats_text = "Model routing is not enabled."
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=stats_text)
 
         unconsolidated = len(session.messages) - session.last_consolidated
         if (unconsolidated >= self.memory_window and session.key not in self._consolidating):
@@ -573,9 +583,29 @@ class AgentLoop:
                 channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
             ))
 
-        final_content, _, all_msgs = await self._run_agent_loop(
-            initial_messages, on_progress=on_progress or _bus_progress,
-        )
+        # Model routing — classify message, potentially re-tier the model for this turn
+        _effective_model = self.model
+        if self.model_router is not None:
+            try:
+                _decision = await self.model_router.route(
+                    message=msg.content,
+                    history_turns=len(history),
+                    expected_model=self.model,
+                )
+                _effective_model = _decision.routed_model
+                if _effective_model != self.model:
+                    logger.info("ModelRouter: {} → {}", self.model, _effective_model)
+            except Exception as _re:
+                logger.warning("ModelRouter failed: {}", _re)
+
+        _orig_model = self.model
+        self.model = _effective_model
+        try:
+            final_content, _, all_msgs = await self._run_agent_loop(
+                initial_messages, on_progress=on_progress or _bus_progress,
+            )
+        finally:
+            self.model = _orig_model
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
