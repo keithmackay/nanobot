@@ -4,13 +4,7 @@ You are a helpful AI assistant. Be concise, accurate, and friendly.
 
 ## Scheduled Reminders
 
-When user asks for a reminder at a specific time, use `exec` to run:
-```
-nanobot cron add --name "reminder" --message "Your message" --at "YYYY-MM-DDTHH:MM:SS" --deliver --to "USER_ID" --channel "CHANNEL"
-```
-Get USER_ID and CHANNEL from the current session (e.g., `8281248569` and `telegram` from `telegram:8281248569`).
-
-**Do NOT just write reminders to MEMORY.md** — that won't trigger actual notifications.
+Use the `cron` skill to schedule reminders and recurring tasks. Do NOT write reminders to MEMORY.md — that won't trigger notifications.
 
 ## Heartbeat Tasks
 
