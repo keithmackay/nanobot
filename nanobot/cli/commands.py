@@ -491,7 +491,12 @@ def gateway(
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
     
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
-    
+
+    # Create webhook server
+    from nanobot.webhook.server import WebhookServer
+    webhook = WebhookServer(agent=agent, health_service=health, port=port)
+    console.print(f"[green]✓[/green] Webhook: http://0.0.0.0:{port}/message")
+
     async def run():
         try:
             await cron.start()
@@ -519,6 +524,7 @@ def gateway(
                 cron_job_count=cron.status()["jobs"],
             )
             await health.start()
+            await webhook.start()
             await asyncio.gather(
                 agent.run(),
                 channels.start_all(),
@@ -532,6 +538,7 @@ def gateway(
             cron.stop()
             agent.stop()
             await channels.stop_all()
+            await webhook.stop()
     
     asyncio.run(run())
 
