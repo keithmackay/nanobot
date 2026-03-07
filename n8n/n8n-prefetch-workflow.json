@@ -1,0 +1,230 @@
+{
+  "name": "Daily Briefing Pre-fetch (5:50 AM)",
+  "active": true,
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "50 5 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "bbc_world",
+      "name": "BBC World RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        -240
+      ],
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "bbc_tech",
+      "name": "BBC Tech RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        -80
+      ],
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "hn_ids",
+      "name": "HN Top Story IDs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        80
+      ],
+      "parameters": {
+        "url": "https://hacker-news.firebaseio.com/v0/topstories.json"
+      }
+    },
+    {
+      "id": "techcrunch",
+      "name": "TechCrunch AI RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        240
+      ],
+      "parameters": {
+        "url": "https://techcrunch.com/category/artificial-intelligence/feed/",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "merge_write",
+      "name": "Merge and Write Pre-fetch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const { execSync } = require('child_process');\nconst items = $input.all();\nconst today = new Date().toISOString().split('T')[0];\nconst outPath = `/Users/keithmackay1/KeithVault/Briefings/.prefetch-${today}.md`;\n\nfunction parseRSS(xml, limit) {\n  const out = [];\n  const re = /<item>(.*?)<\\/item>/gs;\n  let m;\n  while ((m = re.exec(xml || '')) !== null && out.length < limit) {\n    const title = (/<title>(?:<!\\[CDATA\\[)?([^\\]<]+)(?:\\]\\]>)?<\\/title>/.exec(m[1]) || [])[1] || '';\n    const link = (/<link>([^<]+)<\\/link>/.exec(m[1]) || [])[1] || '';\n    const desc = (/<description>(?:<!\\[CDATA\\[)?([^\\]<]{0,300})(?:\\]\\]>)?<\\/description>/.exec(m[1]) || [])[1] || '';\n    if (title.trim()) out.push(`- **${title.trim()}**\\n  ${link.trim()}\\n  ${desc.replace(/<[^>]+>/g,'').trim().slice(0,200)}`);\n  }\n  return out.join('\\n');\n}\n\nconst bbcWorld = parseRSS(items[0]?.json?.data, 10);\nconst bbcTech = parseRSS(items[1]?.json?.data, 8);\nconst hnIds = (items[2]?.json || []).slice(0, 15);\nconst tcAI = parseRSS(items[3]?.json?.data, 6);\n\nconst hnStories = [];\nfor (const id of hnIds) {\n  try {\n    const r = execSync(`curl -sf https://hacker-news.firebaseio.com/v0/item/${id}.json`, {timeout: 4000});\n    const s = JSON.parse(r.toString());\n    if (s && s.title) hnStories.push(`- **${s.title}** (${s.score || 0}\u2605 by ${s.by || '?'}) \u2014 ${s.url || 'news.ycombinator.com'}`);\n  } catch(e) {}\n}\n\nconst content = `# Briefing Pre-fetch \u2014 ${today}\\n_Generated ${new Date().toISOString()} by n8n_\\n\\n## BBC World News\\n${bbcWorld}\\n\\n## BBC Tech\\n${bbcTech}\\n\\n## Hacker News Top 15\\n${hnStories.join('\\n')}\\n\\n## TechCrunch AI\\n${tcAI}\\n`;\n\nrequire('fs').writeFileSync(outPath, content);\nreturn [{json: {status: 'ok', path: outPath, date: today, hnCount: hnStories.length}}];"
+      }
+    },
+    {
+      "id": "discord_notify",
+      "name": "Discord Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/v10/channels/1472143221546025065/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bot {{DISCORD_BOT_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\"content\": \"\u2705 Pre-fetch done: `\" + $json.path + \"` (\u2019\" + $json.hnCount + \" HN stories)\"}"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "BBC World RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "BBC Tech RSS",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HN Top Story IDs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "TechCrunch AI RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BBC World RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge and Write Pre-fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BBC Tech RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge and Write Pre-fetch",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "HN Top Story IDs": {
+      "main": [
+        [
+          {
+            "node": "Merge and Write Pre-fetch",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "TechCrunch AI RSS": {
+      "main": [
+        [
+          {
+            "node": "Merge and Write Pre-fetch",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge and Write Pre-fetch": {
+      "main": [
+        [
+          {
+            "node": "Discord Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "24f739bb-ec82-40c5-9c9f-fb8a7d5d1afd"
+}

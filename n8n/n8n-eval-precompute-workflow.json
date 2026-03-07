@@ -1,0 +1,97 @@
+{
+  "name": "Eval Data Pre-compute (2:55 AM)",
+  "active": true,
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "55 2 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "run_script",
+      "name": "Run gather_eval_data",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "command": "TODAY=$(date +%Y-%m-%d); /usr/local/bin/python3 /Users/keithmackay1/Projects/nanobot/scripts/gather_eval_data.py --days 2 --project nanobot > /tmp/eval-data-${TODAY}.md 2>&1; echo \"exit:$? path:/tmp/eval-data-${TODAY}.md size:$(wc -c < /tmp/eval-data-${TODAY}.md)\""
+      }
+    },
+    {
+      "id": "discord_notify",
+      "name": "Discord Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://discord.com/api/v10/channels/1472143221546025065/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bot {{DISCORD_BOT_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\"content\": \"\u2705 Eval data pre-computed: \" + $json.stdout}"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run gather_eval_data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run gather_eval_data": {
+      "main": [
+        [
+          {
+            "node": "Discord Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "2805d9bd-dbcc-430a-b326-67ea069db428"
+}
