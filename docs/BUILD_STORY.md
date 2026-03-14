@@ -279,6 +279,30 @@ n8n (Colima, port 5678)
 
 ---
 
+## CLI Reference
+
+### `nanobot cron` — Scheduled Tasks
+
+```
+Usage: nanobot cron [OPTIONS] COMMAND [ARGS]...
+
+  Manage scheduled tasks
+
+Options:
+  --help    Show this message and exit.
+
+Commands:
+  list    List scheduled jobs.
+  add     Add a scheduled job.
+  remove  Remove a scheduled job.
+  enable  Enable or disable a job.
+  run     Manually run a job.
+```
+
+Cron jobs are stored in the workspace and run by the cron service inside the gateway process. Jobs can target any channel/chat and support standard cron expressions. Shell scripts are preferred over LLM-driven cron jobs for deterministic tasks (see Lessons Learned).
+
+---
+
 ## Key Technical Decisions
 
 | Decision | Rationale |
