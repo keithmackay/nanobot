@@ -314,6 +314,18 @@ def gateway(
         from nanobot.agent.claudemem import ClaudeMemClient
         claude_mem = ClaudeMemClient(url=config.claude_mem.url, project=config.claude_mem.project)
 
+    # ChromaDB semantic memory
+    chroma_mem = None
+    if config.chroma_mem.enabled:
+        from nanobot.agent.chromamem import ChromaMemClient
+        chroma_mem = ChromaMemClient(
+            ollama_url=config.chroma_mem.ollama_url,
+            chroma_data_dir=config.chroma_mem.chroma_data_dir,
+            project=config.chroma_mem.project,
+            top_k=config.chroma_mem.top_k,
+            model=config.chroma_mem.model,
+        )
+
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
@@ -355,6 +367,7 @@ def gateway(
         channels_config=config.channels,
         personalities={k: v for k, v in config.personalities.items()},
         claude_mem=claude_mem,
+        chroma_mem=chroma_mem,
         model_router=model_router,
     )
     

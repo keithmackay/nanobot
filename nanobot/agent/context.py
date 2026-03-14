@@ -30,6 +30,7 @@ class ContextBuilder:
         self,
         skill_names: list[str] | None = None,
         persistent_context: str | None = None,
+        semantic_context: str | None = None,
         personality: str | None = None,
         personality_config: "PersonalityConfig | None" = None,
     ) -> str:
@@ -48,6 +49,9 @@ class ContextBuilder:
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
+
+        if semantic_context:
+            parts.append(semantic_context)
 
         if persistent_context:
             parts.append(f"# Recent Conversation History (claude-mem)\n\n{persistent_context}")
@@ -155,13 +159,14 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         chat_id: str | None = None,
         message_id: str | None = None,
         persistent_context: str | None = None,
+        semantic_context: str | None = None,
         personality: str | None = None,
         personality_config: "PersonalityConfig | None" = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         return [
             {"role": "system", "content": self.build_system_prompt(
-                skill_names, persistent_context, personality, personality_config
+                skill_names, persistent_context, semantic_context, personality, personality_config
             )},
             *history,
             {"role": "user", "content": self._build_runtime_context(channel, chat_id, message_id)},

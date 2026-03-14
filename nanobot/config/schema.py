@@ -288,6 +288,15 @@ class ClaudeMemConfig(Base):
     project: str = "nanobot"
 
 
+class ChromaMemConfig(Base):
+    """ChromaDB semantic memory configuration."""
+
+    enabled: bool = True
+    ollama_url: str = "http://192.168.1.8:11434"
+    chroma_data_dir: str = "~/.claude-mem/vector-db"
+    project: str = "nanobot"
+    top_k: int = 5
+    model: str = "nomic-embed-text"
 
 
 
@@ -374,6 +383,7 @@ class Config(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     claude_mem: ClaudeMemConfig = Field(default_factory=ClaudeMemConfig)
+    chroma_mem: ChromaMemConfig = Field(default_factory=ChromaMemConfig)
     personalities: dict[str, PersonalityConfig] = Field(default_factory=dict)  # Named personality configs
     tasks: TasksConfig = Field(default_factory=TasksConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)

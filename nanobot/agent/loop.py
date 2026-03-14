@@ -48,6 +48,15 @@ class AgentLoop:
 
     _TOOL_RESULT_MAX_CHARS = 500
 
+    # Phrases that signal the user wants to retrieve past/historical context.
+    # Only when one of these appears will semantic memory search be triggered.
+    _MEMORY_TRIGGERS = frozenset([
+        "remember", "memory", "remind", "recall",
+        "past", "old", "used to", "before", "previously",
+        "earlier", "look back", "what we did", "review",
+        "thought", "history",
+    ])
+
     def __init__(
         self,
         bus: MessageBus,
@@ -66,6 +75,7 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         claude_mem: Any | None = None,
+        chroma_mem: Any | None = None,
         health_service: HealthService | None = None,
         personalities: dict | None = None,
         task_orchestrator: "TaskOrchestrator | None" = None,
@@ -74,6 +84,7 @@ class AgentLoop:
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
         self.claude_mem = claude_mem
+        self.chroma_mem = chroma_mem
         self.channels_config = channels_config
         self.personalities = personalities or {}
         self.task_orchestrator = task_orchestrator
@@ -157,6 +168,12 @@ class AgentLoop:
                 self._mcp_stack = None
         finally:
             self._mcp_connecting = False
+
+    @classmethod
+    def _needs_memory_search(cls, text: str) -> bool:
+        """Return True if the message contains a memory-retrieval trigger phrase."""
+        lower = text.lower()
+        return any(trigger in lower for trigger in cls._MEMORY_TRIGGERS)
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
@@ -560,6 +577,11 @@ class AgentLoop:
             prompt_number = await self.claude_mem.log_turn(key, msg.content)
             persistent_context = await self.claude_mem.get_context()
 
+        # Semantic memory retrieval — only when message contains a memory trigger phrase
+        semantic_context: str | None = None
+        if self.chroma_mem and self._needs_memory_search(msg.content):
+            semantic_context = await self.chroma_mem.search(msg.content)
+
         personality = (msg.metadata or {}).get("personality")
         personality_config = self.personalities.get(personality) if personality else None
 
@@ -571,6 +593,7 @@ class AgentLoop:
             channel=msg.channel, chat_id=msg.chat_id,
             message_id=(msg.metadata or {}).get("message_id"),
             persistent_context=persistent_context,
+            semantic_context=semantic_context,
             personality=personality,
             personality_config=personality_config,
         )
