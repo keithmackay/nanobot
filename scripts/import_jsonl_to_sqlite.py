@@ -9,6 +9,7 @@ Populates:
 
 Usage:
   python scripts/import_jsonl_to_sqlite.py [--dry-run] [--project nanobot]
+  python scripts/import_jsonl_to_sqlite.py [--dry-run] --all
 
 Environment / defaults:
   JSONL_DIR  — path to .claude/projects/<slug>/ dir (auto-detected from --project)
@@ -30,9 +31,25 @@ from pathlib import Path
 HOME = Path.home()
 DEFAULT_DB = HOME / ".claude-mem" / "claude-mem.db"
 
+# Maps a logical project name to the .claude/projects/ directory slug.
+# The project name is stored in sdk_sessions.project.
 PROJECT_DIR_MAP = {
-    "nanobot": HOME / ".claude/projects/-Users-keithmackay1-Projects-nanobot",
-    "openclaw": HOME / ".claude/projects/-Users-keithmackay1--openclaw-workspace",
+    "nanobot":        HOME / ".claude/projects/-Users-keithmackay1-Projects-nanobot",
+    "openclaw":       HOME / ".claude/projects/-Users-keithmackay1--openclaw-workspace",
+    "openclaw-proj":  HOME / ".claude/projects/-Users-keithmackay1-Projects-openclaw",
+    "user-root":      HOME / ".claude/projects/-Users-keithmackay1",
+    "projects-root":  HOME / ".claude/projects/-Users-keithmackay1-Projects",
+    "foo":            HOME / ".claude/projects/-Users-keithmackay1-Projects--foo",
+    "n8n":            HOME / ".claude/projects/-Users-keithmackay1-Projects-n8n",
+    "memvault":       HOME / ".claude/projects/-Users-keithmackay1-Projects-memvault",
+    "sec-seer":       HOME / ".claude/projects/-Users-keithmackay1-Projects-sec-seer",
+    "home-assistant": HOME / ".claude/projects/-Users-keithmackay1-Projects-home-assistant",
+    "writing":        HOME / ".claude/projects/-Users-keithmackay1-Projects-writing",
+    "tinyclaw":       HOME / ".claude/projects/-Users-keithmackay1-Projects-tinyclaw",
+    "iswear":         HOME / ".claude/projects/-Users-keithmackay1-Projects-iswear",
+    "embedhub":       HOME / ".claude/projects/-Users-keithmackay1-Projects-embedhub",
+    "autoresearch":   HOME / ".claude/projects/-Users-keithmackay1-Projects-autoresearch-macos",
+    "admin":          HOME / ".claude/projects/-Users-keithmackay1-Projects-admin",
 }
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -223,35 +240,10 @@ def import_session(db: sqlite3.Connection, session: dict, project: str, dry_run:
 
 # ── Main ───────────────────────────────────────────────────────────────────
 
-def main():
-    ap = argparse.ArgumentParser(description="Import Claude Code JSONL sessions into SQLite")
-    ap.add_argument("--project", default="nanobot", help="Project name (nanobot, openclaw, ...)")
-    ap.add_argument("--jsonl-dir", default=None, help="Override JSONL directory path")
-    ap.add_argument("--db", default=str(DEFAULT_DB), help="SQLite DB path")
-    ap.add_argument("--dry-run", action="store_true", help="Show what would be inserted, don't write")
-    args = ap.parse_args()
-
-    jsonl_dir = Path(args.jsonl_dir) if args.jsonl_dir else PROJECT_DIR_MAP.get(args.project)
-    if not jsonl_dir or not jsonl_dir.exists():
-        print(f"ERROR: JSONL directory not found: {jsonl_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    db_path = Path(args.db)
-    if not db_path.exists():
-        print(f"ERROR: DB not found: {db_path}", file=sys.stderr)
-        sys.exit(1)
-
+def run_project(project: str, jsonl_dir: Path, db: sqlite3.Connection, dry_run: bool) -> dict:
+    """Import all JSONL files for one project. Returns totals dict."""
     files = sorted(jsonl_dir.glob("*.jsonl"))
-    print(f"import_jsonl_to_sqlite.py — {'DRY RUN' if args.dry_run else 'LIVE'}")
-    print(f"  Project: {args.project}")
-    print(f"  JSONL dir: {jsonl_dir}")
-    print(f"  DB: {db_path}")
-    print(f"  Files: {len(files)}")
-    print()
-
-    db = sqlite3.connect(str(db_path))
-    db.execute("PRAGMA journal_mode=WAL")
-    db.execute("PRAGMA synchronous=NORMAL")
+    print(f"\n── {project} ({len(files)} files, {jsonl_dir.name}) ──")
 
     totals = {"sessions": 0, "user_prompts": 0, "asst_responses": 0, "skipped": 0, "empty": 0}
 
@@ -261,7 +253,7 @@ def main():
             totals["empty"] += 1
             continue
 
-        counts = import_session(db, session, args.project, args.dry_run)
+        counts = import_session(db, session, project, dry_run)
 
         if counts["sessions"] == 0 and counts["user_prompts"] == 0:
             totals["skipped"] += 1
@@ -270,44 +262,93 @@ def main():
             totals["user_prompts"] += counts["user_prompts"]
             totals["asst_responses"] += counts["asst_responses"]
 
-        if (i + 1) % 50 == 0:
+        if (i + 1) % 200 == 0:
             print(f"  [{i+1}/{len(files)}] sessions={totals['sessions']} "
                   f"prompts={totals['user_prompts']} responses={totals['asst_responses']} "
                   f"skipped={totals['skipped']}")
-            if not args.dry_run:
+            if not dry_run:
                 db.commit()
 
-    if not args.dry_run:
+    if not dry_run:
         db.commit()
+
+    print(f"  Done: +{totals['sessions']} sessions, +{totals['user_prompts']} prompts, "
+          f"+{totals['asst_responses']} responses  ({totals['skipped']} skipped, {totals['empty']} empty)")
+    return totals
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Import Claude Code JSONL sessions into SQLite")
+    ap.add_argument("--project", default=None, help="Project name (see PROJECT_DIR_MAP). Omit with --all.")
+    ap.add_argument("--all", action="store_true", dest="all_projects", help="Import every project in PROJECT_DIR_MAP")
+    ap.add_argument("--jsonl-dir", default=None, help="Override JSONL directory (only with --project)")
+    ap.add_argument("--db", default=str(DEFAULT_DB), help="SQLite DB path")
+    ap.add_argument("--dry-run", action="store_true", help="Show what would be inserted, don't write")
+    args = ap.parse_args()
+
+    db_path = Path(args.db)
+    if not db_path.exists():
+        print(f"ERROR: DB not found: {db_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Build the list of (project, dir) pairs to process
+    if args.all_projects:
+        pairs = [(p, d) for p, d in PROJECT_DIR_MAP.items() if d.exists()]
+        skipped_dirs = [p for p, d in PROJECT_DIR_MAP.items() if not d.exists()]
+        if skipped_dirs:
+            print(f"Note: skipping {skipped_dirs} (dirs not found)")
+    elif args.project:
+        jsonl_dir = Path(args.jsonl_dir) if args.jsonl_dir else PROJECT_DIR_MAP.get(args.project)
+        if not jsonl_dir or not jsonl_dir.exists():
+            print(f"ERROR: JSONL directory not found: {jsonl_dir}", file=sys.stderr)
+            sys.exit(1)
+        pairs = [(args.project, jsonl_dir)]
+    else:
+        ap.print_help()
+        sys.exit(1)
+
+    print(f"import_jsonl_to_sqlite.py — {'DRY RUN' if args.dry_run else 'LIVE'}")
+    print(f"  DB: {db_path}")
+    print(f"  Projects: {[p for p, _ in pairs]}")
+
+    db = sqlite3.connect(str(db_path))
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=NORMAL")
+
+    grand = {"sessions": 0, "user_prompts": 0, "asst_responses": 0, "skipped": 0, "empty": 0}
+
+    for project, jsonl_dir in pairs:
+        totals = run_project(project, jsonl_dir, db, args.dry_run)
+        for k in grand:
+            grand[k] += totals[k]
+
     db.close()
 
     print()
-    print("── Summary ──")
-    print(f"  New sessions inserted: {totals['sessions']}")
-    print(f"  New user prompts:      {totals['user_prompts']}")
-    print(f"  New asst responses:    {totals['asst_responses']}")
-    print(f"  Already imported:      {totals['skipped']}")
-    print(f"  Empty/no-text files:   {totals['empty']}")
+    print("══ Grand total ══")
+    print(f"  New sessions:          {grand['sessions']}")
+    print(f"  New user prompts:      {grand['user_prompts']}")
+    print(f"  New asst responses:    {grand['asst_responses']}")
+    print(f"  Already imported:      {grand['skipped']}")
+    print(f"  Empty/no-text files:   {grand['empty']}")
 
     if not args.dry_run:
-        # Final count check
-        import sqlite3 as sq
-        db2 = sq.connect(str(db_path))
-        n_sess = db2.execute("SELECT count(*) FROM sdk_sessions WHERE project=?", (args.project,)).fetchone()[0]
-        n_prom = db2.execute(
-            "SELECT count(*) FROM user_prompts up JOIN sdk_sessions s ON up.claude_session_id=s.claude_session_id WHERE s.project=?",
-            (args.project,)
-        ).fetchone()[0]
-        n_resp = db2.execute(
-            "SELECT count(*) FROM assistant_responses ar JOIN sdk_sessions s ON ar.claude_session_id=s.claude_session_id WHERE s.project=?",
-            (args.project,)
-        ).fetchone()[0]
+        db2 = sqlite3.connect(str(db_path))
+        rows = db2.execute(
+            "SELECT project, count(DISTINCT s.id), "
+            "  (SELECT count(*) FROM user_prompts up WHERE up.claude_session_id IN (SELECT claude_session_id FROM sdk_sessions WHERE project=s.project)), "
+            "  (SELECT count(*) FROM assistant_responses ar WHERE ar.claude_session_id IN (SELECT claude_session_id FROM sdk_sessions WHERE project=s.project)) "
+            "FROM sdk_sessions s WHERE project IN ({}) GROUP BY project".format(
+                ",".join("?" for _ in pairs)
+            ),
+            [p for p, _ in pairs]
+        ).fetchall()
         db2.close()
         print()
-        print(f"  DB totals for project '{args.project}':")
-        print(f"    sdk_sessions:        {n_sess}")
-        print(f"    user_prompts:        {n_prom}")
-        print(f"    assistant_responses: {n_resp}")
+        print(f"  {'Project':<20} {'Sessions':>8} {'Prompts':>8} {'Responses':>10}")
+        print(f"  {'-'*20} {'-'*8} {'-'*8} {'-'*10}")
+        for row in rows:
+            print(f"  {row[0]:<20} {row[1]:>8} {row[2]:>8} {row[3]:>10}")
 
 
 if __name__ == "__main__":

@@ -2,20 +2,22 @@
 """
 backfill_all.py — Comprehensive ChromaDB backfill for all conversation sources.
 
-Handles three source types:
+Handles four source types:
   1. Claude Code JSONL gap — session files newer than what's in Chroma
      (fills the window when claude-mem worker was down)
   2. Nanobot Discord sessions — ~/.nanobot/workspace/sessions/discord_*.jsonl
      (includes channel_id → personality mapping from ~/.nanobot/config.json)
   3. Nanobot Telegram sessions — ~/.nanobot/workspace/sessions/telegram_*.jsonl
+  4. SQLite multi-project — user_prompts + assistant_responses from all projects
+     in claude-mem SQLite (user-root, foo, iswear, admin, home-assistant, etc.)
 
 All sources go into cm__nanobot. OpenClaw Discord history is not recoverable from
 files (sessions.json is state-only; per-session JSONLs were cleared).
 
 Usage:
-  python3 scripts/backfill_all.py [--dry-run] [--source all|jsonl|discord|telegram]
-  python3 scripts/backfill_all.py --dry-run       # show counts, no writes
-  python3 scripts/backfill_all.py --source discord # only Discord sessions
+  python3 scripts/backfill_all.py [--dry-run] [--source all|jsonl|discord|telegram|sqlite]
+  python3 scripts/backfill_all.py --dry-run        # show counts, no writes
+  python3 scripts/backfill_all.py --source sqlite  # only SQLite multi-project
 
 Requirements: chromadb (uvx --with chromadb python3 scripts/backfill_all.py)
 """
@@ -24,6 +26,7 @@ import argparse
 import hashlib
 import json
 import re
+import sqlite3
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -41,9 +44,17 @@ COLLECTION_NANOBOT = "cm__nanobot"
 NANOBOT_SESSIONS_DIR = Path.home() / ".nanobot/workspace/sessions"
 NANOBOT_CONFIG = Path.home() / ".nanobot/config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude/projects"
+CLAUDE_MEM_DB = Path.home() / ".claude-mem/claude-mem.db"
 
 # Min file mtime to consider for JSONL gap backfill (last known SQLite entry ~Mar 7)
 JSONL_GAP_SINCE_EPOCH = 1741305600  # 2026-03-07 00:00 UTC
+
+# Projects to pull from SQLite into cm__nanobot (excludes nanobot+openclaw, handled separately)
+SQLITE_EXTRA_PROJECTS = [
+    "openclaw-proj", "user-root", "projects-root", "foo", "n8n", "memvault",
+    "sec-seer", "home-assistant", "writing", "tinyclaw", "iswear", "embedhub",
+    "autoresearch", "admin",
+]
 
 
 # ── Embedding ──────────────────────────────────────────────────────────────────
@@ -457,13 +468,112 @@ def backfill_telegram(collection, existing_ids: set[str], dry_run: bool) -> int:
     return added
 
 
+# ── Source 4: SQLite multi-project ────────────────────────────────────────────
+
+def backfill_sqlite_projects(collection, existing_ids: set[str], dry_run: bool) -> int:
+    """
+    Embed user_prompts + assistant_responses from SQLITE_EXTRA_PROJECTS that
+    aren't already in ChromaDB. Uses doc IDs of the form:
+      sqlite_{project}_{session_id[:8]}_user_{n}
+      sqlite_{project}_{session_id[:8]}_asst_{n}
+    """
+    print(f"\n── SQLite multi-project backfill ({', '.join(SQLITE_EXTRA_PROJECTS)}) ──")
+
+    if not CLAUDE_MEM_DB.exists():
+        print(f"  DB not found: {CLAUDE_MEM_DB}")
+        return 0
+
+    db = sqlite3.connect(str(CLAUDE_MEM_DB))
+    db.row_factory = sqlite3.Row
+
+    docs = []
+    skipped = 0
+
+    for project in SQLITE_EXTRA_PROJECTS:
+        sessions = db.execute(
+            "SELECT claude_session_id FROM sdk_sessions WHERE project=?", (project,)
+        ).fetchall()
+
+        proj_docs = 0
+        proj_skip = 0
+        for row in sessions:
+            sid = row["claude_session_id"]
+            short = sid.replace(":", "_")[:12]
+
+            # User prompts
+            for prow in db.execute(
+                "SELECT prompt_number, prompt_text, created_at FROM user_prompts WHERE claude_session_id=? ORDER BY prompt_number",
+                (sid,)
+            ):
+                doc_id = f"sqlite_{project}_{short}_user_{prow['prompt_number']}"
+                if doc_id in existing_ids:
+                    proj_skip += 1
+                    continue
+                text = (prow["prompt_text"] or "").strip()
+                if not text or len(text) < 10:
+                    continue
+                docs.append({
+                    "id": doc_id,
+                    "text": text,
+                    "metadata": {
+                        "doc_type": "user_prompt",
+                        "project": project,
+                        "session_id": sid[:16],
+                        "source": "sqlite",
+                        "timestamp": prow["created_at"] or "",
+                    },
+                })
+                proj_docs += 1
+
+            # Assistant responses
+            for arow in db.execute(
+                "SELECT prompt_number, response_text, created_at FROM assistant_responses WHERE claude_session_id=? ORDER BY prompt_number",
+                (sid,)
+            ):
+                doc_id = f"sqlite_{project}_{short}_asst_{arow['prompt_number']}"
+                if doc_id in existing_ids:
+                    proj_skip += 1
+                    continue
+                text = (arow["response_text"] or "").strip()
+                if not text or len(text) < 10:
+                    continue
+                docs.append({
+                    "id": doc_id,
+                    "text": text,
+                    "metadata": {
+                        "doc_type": "assistant_response",
+                        "project": project,
+                        "session_id": sid[:16],
+                        "source": "sqlite",
+                        "timestamp": arow["created_at"] or "",
+                    },
+                })
+                proj_docs += 1
+
+        skipped += proj_skip
+        print(f"  {project}: {proj_docs} new docs ({proj_skip} skipped)")
+
+    db.close()
+
+    total_new = len(docs)
+    print(f"  Total: {total_new} new docs to embed, {skipped} already in Chroma")
+
+    if dry_run:
+        print(f"  [dry-run] Would add {total_new} docs")
+        return total_new
+
+    added = upsert_docs(collection, docs, dry_run=False)
+    print(f"  ✓ Added {added} docs")
+    return added
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="Show counts, no writes")
     parser.add_argument("--source", default="all",
-                        choices=["all", "jsonl", "discord", "telegram"],
+                        choices=["all", "jsonl", "discord", "telegram", "sqlite"],
                         help="Which source to backfill (default: all)")
     args = parser.parse_args()
 
@@ -512,6 +622,9 @@ def main():
 
     if args.source in ("all", "telegram"):
         total_added += backfill_telegram(collection, existing_ids, args.dry_run)
+
+    if args.source in ("all", "sqlite"):
+        total_added += backfill_sqlite_projects(collection, existing_ids, args.dry_run)
 
     print(f"\n{'[dry-run] Would add' if args.dry_run else 'Total added:'} {total_added} docs")
     if not args.dry_run:
