@@ -352,6 +352,17 @@ def backfill_discord(collection, existing_ids: set[str], dry_run: bool) -> int:
                 },
             })
 
+    # Deduplicate by ID (same message text in same channel → same hash)
+    seen_ids: set[str] = set()
+    unique_docs = []
+    for d in docs:
+        if d["id"] not in seen_ids:
+            seen_ids.add(d["id"])
+            unique_docs.append(d)
+    if len(unique_docs) < len(docs):
+        print(f"  [dedup] {len(docs) - len(unique_docs)} intra-file duplicates removed")
+    docs = unique_docs
+
     print(f"  {len(docs)} new docs to embed, {skipped} already in Chroma")
     if dry_run:
         print(f"  [dry-run] Would add {len(docs)} docs")
