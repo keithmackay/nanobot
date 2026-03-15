@@ -51,7 +51,7 @@ JSONL_GAP_SINCE_EPOCH = 1741305600  # 2026-03-07 00:00 UTC
 
 # Projects to pull from SQLite into cm__nanobot (excludes nanobot+openclaw, handled separately)
 SQLITE_EXTRA_PROJECTS = [
-    "openclaw-proj", "user-root", "projects-root", "foo", "n8n", "memvault",
+    "openclaw", "openclaw-proj", "user-root", "projects-root", "foo", "n8n", "memvault",
     "sec-seer", "home-assistant", "writing", "tinyclaw", "iswear", "embedhub",
     "autoresearch", "admin",
 ]
