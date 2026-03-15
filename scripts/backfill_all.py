@@ -69,7 +69,7 @@ def embed_batch(texts: list[str]) -> list[list[float]] | None:
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
         return data["embeddings"]
     except Exception as e:
@@ -583,14 +583,18 @@ def main():
     print(f"  Embed model: {EMBED_MODEL} via {OLLAMA_URL}")
     print()
 
-    # Verify Ollama connectivity
-    try:
+    # Verify Ollama connectivity — retry up to 5 times with backoff
+    ollama_ok = False
+    for attempt in range(1, 6):
         test_embed = embed_batch(["connection test"])
-        if test_embed is None:
-            raise RuntimeError("embed returned None")
-        print(f"  ✓ Ollama reachable ({len(test_embed[0])}-dim vectors)")
-    except Exception as e:
-        print(f"  ✗ Ollama not reachable at {OLLAMA_URL}: {e}")
+        if test_embed is not None:
+            print(f"  ✓ Ollama reachable ({len(test_embed[0])}-dim vectors)")
+            ollama_ok = True
+            break
+        print(f"  [attempt {attempt}/5] Ollama not ready, retrying in 15s...")
+        time.sleep(15)
+    if not ollama_ok:
+        print(f"  ✗ Ollama not reachable at {OLLAMA_URL} after 5 attempts")
         if not args.dry_run:
             return
 
