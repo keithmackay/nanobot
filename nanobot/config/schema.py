@@ -310,6 +310,15 @@ class RoutingConfig(Base):
     opus_model: str = "anthropic/claude-opus-4-6"
     db_path: str = "~/.nanobot/routing/metrics.db"
 
+class SessionStoreConfig(Base):
+    """SQLite-backed session store configuration (LCM Phase 1)."""
+
+    backend: str = "sqlite"  # sqlite | jsonl
+    db_path: str = "~/.nanobot/workspace/sessions/nanobot.db"
+    fresh_tail_count: int = 32
+    context_threshold: float = 0.75
+
+
 class TasksConfig(Base):
     """Long-running task orchestration configuration."""
 
@@ -387,6 +396,7 @@ class Config(BaseSettings):
     personalities: dict[str, PersonalityConfig] = Field(default_factory=dict)  # Named personality configs
     tasks: TasksConfig = Field(default_factory=TasksConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
+    session_store: SessionStoreConfig = Field(default_factory=SessionStoreConfig)
 
     @property
     def workspace_path(self) -> Path:
