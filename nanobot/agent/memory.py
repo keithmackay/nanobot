@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from loguru import logger
 
@@ -13,6 +14,17 @@ from nanobot.utils.helpers import ensure_dir
 if TYPE_CHECKING:
     from nanobot.providers.base import LLMProvider
     from nanobot.session.manager import Session
+
+# Attempt to import the SQLite-backed store (Phase 1).  If the module is not
+# yet installed we fall back gracefully to the legacy JSONL-based behaviour.
+try:
+    from nanobot.session.store import SessionStore  # noqa: F401 — used in type hints
+    from nanobot.memory.compaction import run_incremental_compaction, should_compact
+    _DAG_COMPACTION_AVAILABLE = True
+except ImportError:
+    _DAG_COMPACTION_AVAILABLE = False
+
+_std_logger = logging.getLogger(__name__)
 
 
 _SAVE_MEMORY_TOOL = [
@@ -78,6 +90,10 @@ class MemoryStore:
         """Consolidate old messages into MEMORY.md + HISTORY.md via LLM tool call.
 
         Returns True on success (including no-op), False on failure.
+
+        DEPRECATED: Use trigger_dag_compaction() when the SQLite SessionStore
+        backend is active.  This method remains in place as the fallback path
+        for JSONL-backed sessions.
         """
         if archive_all:
             old_messages = session.messages
@@ -148,3 +164,59 @@ class MemoryStore:
         except Exception:
             logger.exception("Memory consolidation failed")
             return False
+
+
+async def trigger_dag_compaction(
+    session,
+    store,
+    llm_caller: Callable,
+    model_context_limit: int,
+) -> Optional[dict]:
+    """Trigger DAG-based incremental compaction when the SQLite backend is active.
+
+    Uses run_incremental_compaction() from nanobot.memory.compaction.  Returns
+    the compaction result dict on success, or None if compaction was not needed
+    or the DAG compaction module is unavailable.
+
+    Falls back to legacy consolidation when _DAG_COMPACTION_AVAILABLE is False
+    (i.e. store.py is not yet installed).
+
+    Args:
+        session:             SQLite Session object (nanobot.session.store.Session).
+        store:               Active SessionStore instance.
+        llm_caller:          Async callable (prompt: str, temp: float) -> str.
+        model_context_limit: Token budget for the model in use.
+    """
+    if not _DAG_COMPACTION_AVAILABLE:
+        _std_logger.debug(
+            "DAG compaction unavailable (session.store not installed); skipping for session %s",
+            getattr(session, "id", "?"),
+        )
+        return None
+
+    try:
+        if not should_compact(store, session, model_context_limit):
+            return None
+    except Exception:
+        _std_logger.exception(
+            "DAG compaction: should_compact check failed for session %s",
+            getattr(session, "id", "?"),
+        )
+        return None
+
+    try:
+        result = await run_incremental_compaction(store, session, llm_caller)
+        leaf = result.get("leaf_summary")
+        condensed = result.get("condensed_summaries", [])
+        _std_logger.info(
+            "DAG compaction done for session %s: leaf=%s condensed=%d",
+            getattr(session, "id", "?"),
+            getattr(leaf, "id", None),
+            len(condensed),
+        )
+        return result
+    except Exception:
+        _std_logger.exception(
+            "DAG compaction failed for session %s", getattr(session, "id", "?")
+        )
+        return None
