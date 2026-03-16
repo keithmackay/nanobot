@@ -4,6 +4,17 @@ from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
+# System prompt snippet describing memory recall tools.
+# Include this in the agent's system prompt when memory tools are registered.
+MEMORY_TOOLS_SYSTEM_PROMPT = """\
+## Memory Tools
+You have access to your own conversation history:
+- memory_search(query) — full-text or regex search across all past turns
+- memory_describe(id) — get details + lineage for a summary (use "msg:N" or "sum:N")
+- memory_expand(summary_id, question) — deep-dive a compressed summary to answer a question
+Use these proactively when the user references past context you may not have in your active window.\
+"""
+
 
 class ToolRegistry:
     """

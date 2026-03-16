@@ -146,6 +146,18 @@ class AgentLoop:
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
+        # Register LCM memory recall tools (graceful: no-op if store not available)
+        try:
+            from nanobot.agent.tools.memory_tools import (
+                MemorySearchTool,
+                MemoryDescribeTool,
+                MemoryExpandTool,
+            )
+            self.tools.register(MemorySearchTool())
+            self.tools.register(MemoryDescribeTool())
+            self.tools.register(MemoryExpandTool())
+        except ImportError:
+            pass
 
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
@@ -586,17 +598,65 @@ class AgentLoop:
         personality_config = self.personalities.get(personality) if personality else None
 
         history = session.get_history(max_messages=self.memory_window)
-        initial_messages = self.context.build_messages(
-            history=history,
-            current_message=msg.content,
-            media=msg.media if msg.media else None,
-            channel=msg.channel, chat_id=msg.chat_id,
-            message_id=(msg.metadata or {}).get("message_id"),
-            persistent_context=persistent_context,
-            semantic_context=semantic_context,
-            personality=personality,
-            personality_config=personality_config,
-        )
+
+        # Try LCM assembler first; fall back to legacy session history if unavailable
+        _lcm_messages: list[dict] | None = None
+        try:
+            from nanobot.memory.assembler import assemble_context
+            from nanobot.session.store import SessionStore
+            from nanobot.config.loader import load_config
+
+            _cfg = load_config()
+            if hasattr(_cfg, "session_store") and _cfg.session_store.backend == "sqlite":
+                _store = SessionStore(_cfg.session_store)
+                _session_obj = _store.get_or_create_session(
+                    msg.channel, msg.chat_id,
+                    personality=personality or "mac",
+                )
+                _model_limit = 200_000  # Claude Sonnet 4.x context window
+                _assemble_result = assemble_context(
+                    _store,
+                    _session_obj,
+                    _model_limit,
+                    fresh_tail_count=_cfg.session_store.fresh_tail_count,
+                    max_budget_fraction=_cfg.session_store.context_threshold,
+                )
+                if _assemble_result is not None and _assemble_result.messages:
+                    _lcm_messages = _assemble_result.messages
+                    logger.debug(
+                        "LCM assembler: {} items ({} tokens, {} evicted)",
+                        _assemble_result.items_included,
+                        _assemble_result.estimated_tokens,
+                        _assemble_result.items_evicted,
+                    )
+        except (ImportError, Exception) as _lcm_err:
+            logger.debug("LCM assembler unavailable, using legacy history: {}", _lcm_err)
+
+        if _lcm_messages is not None:
+            # LCM path: use assembled messages as history, append current turn
+            initial_messages = self.context.build_messages(
+                history=_lcm_messages,
+                current_message=msg.content,
+                media=msg.media if msg.media else None,
+                channel=msg.channel, chat_id=msg.chat_id,
+                message_id=(msg.metadata or {}).get("message_id"),
+                persistent_context=persistent_context,
+                semantic_context=semantic_context,
+                personality=personality,
+                personality_config=personality_config,
+            )
+        else:
+            initial_messages = self.context.build_messages(
+                history=history,
+                current_message=msg.content,
+                media=msg.media if msg.media else None,
+                channel=msg.channel, chat_id=msg.chat_id,
+                message_id=(msg.metadata or {}).get("message_id"),
+                persistent_context=persistent_context,
+                semantic_context=semantic_context,
+                personality=personality,
+                personality_config=personality_config,
+            )
 
         async def _bus_progress(content: str, *, tool_hint: bool = False) -> None:
             meta = dict(msg.metadata or {})
