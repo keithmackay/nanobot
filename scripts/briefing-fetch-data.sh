@@ -68,5 +68,58 @@ with open(f"{OUT}/rss-feeds.json", "w") as f:
 print(f"RSS: {len(all_items)} items")
 PYEOF
 
+# 4. ArXiv recent papers (cs.AI, cs.LG, cs.CL, q-bio.NC, psych)
+echo "Fetching arXiv papers..."
+python3 << 'PYEOF'
+import urllib.request, json, re
+from xml.etree import ElementTree as ET
+
+CATS = "cat:cs.AI+OR+cat:cs.LG+OR+cat:cs.CL+OR+cat:q-bio.NC+OR+cat:psych"
+URL = f"https://export.arxiv.org/api/query?search_query={CATS}&sortBy=submittedDate&sortOrder=descending&max_results=25"
+NS = {
+    'atom': 'http://www.w3.org/2005/Atom',
+    'arxiv': 'http://arxiv.org/schemas/atom',
+}
+
+def strip_tags(t):
+    return re.sub(r'\s+', ' ', re.sub('<[^>]+>', '', t or '')).strip()
+
+try:
+    req = urllib.request.Request(URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        root = ET.parse(r).getroot()
+    papers = []
+    for entry in root.findall('atom:entry', NS):
+        title   = strip_tags(entry.findtext('atom:title', namespaces=NS) or '')
+        summary = strip_tags(entry.findtext('atom:summary', namespaces=NS) or '')[:400]
+        link    = ''
+        for lnk in entry.findall('atom:link', NS):
+            if lnk.get('rel') == 'alternate' or lnk.get('type') == 'text/html':
+                link = lnk.get('href', '')
+                break
+        if not link:
+            aid = (entry.findtext('atom:id', namespaces=NS) or '').split('/')[-1]
+            link = f"https://arxiv.org/abs/{aid}" if aid else ''
+        cats = [c.get('term','') for c in entry.findall('atom:category', NS)]
+        authors = [a.findtext('atom:name', namespaces=NS) or '' for a in entry.findall('atom:author', NS)][:3]
+        published = (entry.findtext('atom:published', namespaces=NS) or '')[:10]
+        papers.append({
+            "title": title,
+            "summary": summary,
+            "link": link,
+            "categories": cats,
+            "authors": authors,
+            "published": published,
+        })
+    with open("/tmp/briefing-data/arxiv-papers.json", "w") as f:
+        json.dump(papers, f, indent=2)
+    print(f"arXiv: {len(papers)} papers")
+except Exception as e:
+    import traceback
+    print(f"arXiv fetch failed: {e}")
+    with open("/tmp/briefing-data/arxiv-papers.json", "w") as f:
+        json.dump([], f)
+PYEOF
+
 echo "Done. Data in $OUT/"
 ls -la "$OUT/"
