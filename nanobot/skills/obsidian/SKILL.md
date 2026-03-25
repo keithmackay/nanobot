@@ -7,6 +7,19 @@ metadata: {"clawdbot":{"emoji":"💎","requires":{"bins":["obsidian-cli"]},"inst
 
 # Obsidian
 
+## MANDATORY: Frontmatter Tagging
+
+> **Before creating or writing any note, always invoke the `obsidian-tagging` skill.**
+> This applies to ALL personalities (Mac, Archie, or any other). No note should be written without proper frontmatter.
+
+The obsidian-tagging skill will:
+1. Read `Atlas/context.md` for the current taxonomy
+2. Generate correct frontmatter: `context`, `type`, `subtype`, `tags`, `interpreter`, `created`
+3. Prepend the frontmatter block to the note content
+
+Only then proceed to the obsidian-cli create or direct file write.
+
+
 Obsidian vault = a normal folder on disk.
 
 Vault structure (typical)

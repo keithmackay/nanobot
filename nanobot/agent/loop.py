@@ -632,11 +632,25 @@ class AgentLoop:
         except (ImportError, Exception) as _lcm_err:
             logger.debug("LCM assembler unavailable, using legacy history: {}", _lcm_err)
 
+        # Phase 5: Large file extraction — replace oversized message blocks with stubs
+        _user_content = msg.content
+        try:
+            from nanobot.memory.large_file_handler import process_message as _lfh_process
+            _lfh_result = _lfh_process(_user_content, session_id=key, workspace=self.workspace)
+            if _lfh_result.extracted:
+                _user_content = _lfh_result.processed_content
+                logger.info(
+                    "LCM large-file: extracted {} block(s) from message (session {})",
+                    len(_lfh_result.extracted), key,
+                )
+        except Exception as _lfh_err:
+            logger.debug("Large file handler skipped: {}", _lfh_err)
+
         if _lcm_messages is not None:
             # LCM path: use assembled messages as history, append current turn
             initial_messages = self.context.build_messages(
                 history=_lcm_messages,
-                current_message=msg.content,
+                current_message=_user_content,
                 media=msg.media if msg.media else None,
                 channel=msg.channel, chat_id=msg.chat_id,
                 message_id=(msg.metadata or {}).get("message_id"),
@@ -648,7 +662,7 @@ class AgentLoop:
         else:
             initial_messages = self.context.build_messages(
                 history=history,
-                current_message=msg.content,
+                current_message=_user_content,
                 media=msg.media if msg.media else None,
                 channel=msg.channel, chat_id=msg.chat_id,
                 message_id=(msg.metadata or {}).get("message_id"),

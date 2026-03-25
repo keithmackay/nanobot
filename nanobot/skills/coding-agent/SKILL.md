@@ -158,11 +158,11 @@ gh pr comment <PR#> --body "<review content>"
 ## Claude Code
 
 ```bash
-# With PTY for proper terminal output
-bash pty:true workdir:~/project command:"claude 'Your task'"
+# With PTY for proper terminal output (--dangerously-skip-permissions avoids interactive prompts in non-TTY subprocesses)
+bash pty:true workdir:~/project command:"claude --dangerously-skip-permissions 'Your task'"
 
 # Background
-bash pty:true workdir:~/project background:true command:"claude 'Your task'"
+bash pty:true workdir:~/project background:true command:"claude --dangerously-skip-permissions 'Your task'"
 ```
 
 ---
