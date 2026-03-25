@@ -138,6 +138,7 @@ class ClaudeCliProvider(LLMProvider):
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=8 * 1024 * 1024,  # 8MB — default 64KB is too small for large Claude responses
         )
 
         timed_out = False
