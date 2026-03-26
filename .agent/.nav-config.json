@@ -1,0 +1,9 @@
+{
+  "project": "nanobot",
+  "navigator_version": "4.7.0",
+  "project_management": "none",
+  "task_prefix": "TASK",
+  "team_chat": "none",
+  "lazy_load": true,
+  "context_markers_dir": ".agent/.context-markers"
+}
