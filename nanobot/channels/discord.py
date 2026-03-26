@@ -289,7 +289,8 @@ class DiscordChannel(BaseChannel):
             return
 
         guild_id = str(payload.get("guild_id") or "")
-        if not self._is_allowed_guild(sender_id, guild_id, channel_id, content):
+        has_attachments = bool(payload.get("attachments"))
+        if not self._is_allowed_guild(sender_id, guild_id, channel_id, content, has_attachments):
             return
 
         content_parts = [content] if content else []
@@ -354,7 +355,8 @@ class DiscordChannel(BaseChannel):
         return guild_cfg.personality
 
     def _is_allowed_guild(
-        self, sender_id: str, guild_id: str, channel_id: str, content: str
+        self, sender_id: str, guild_id: str, channel_id: str, content: str,
+        has_attachments: bool = False
     ) -> bool:
         """Check whether this message is allowed given guild/channel/user config.
 
@@ -382,8 +384,8 @@ class DiscordChannel(BaseChannel):
             if guild_cfg.users and sender_id not in guild_cfg.users:
                 return False
 
-            # Require mention check
-            if guild_cfg.require_mention:
+            # Require mention check — waived for attachment-only messages (no text to @-mention in)
+            if guild_cfg.require_mention and not has_attachments:
                 bot_mention_pattern = "<@"
                 if bot_mention_pattern not in content:
                     return False
