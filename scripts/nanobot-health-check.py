@@ -43,8 +43,19 @@ STALE_RESTART_THRESHOLD_S = 7200   # restart gateway if no agent turn for 2 hour
 STUCK_PROCESS_THRESHOLD_S = 300    # kill claude subprocesses older than 5 minutes
 LOG_ROTATE_MB = 50                 # rotate gateway logs when they exceed this size
 
-TELEGRAM_BOT_TOKEN = "7913654528:AAFC_lkaqVP4txwVJ6Ghqi-dr_9lfrnKet4"
+NANOBOT_CONFIG = Path.home() / ".nanobot/config.json"
 TELEGRAM_CHAT_ID = "8414985222"
+
+
+def _load_telegram_token() -> str:
+    try:
+        cfg = json.loads(NANOBOT_CONFIG.read_text())
+        return cfg["channels"]["telegram"]["token"]
+    except Exception as exc:
+        sys.exit(f"Could not read Telegram token from {NANOBOT_CONFIG}: {exc}")
+
+
+TELEGRAM_BOT_TOKEN = _load_telegram_token()
 
 # ---------------------------------------------------------------------------
 # Logging
