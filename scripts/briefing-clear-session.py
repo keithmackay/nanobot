@@ -26,13 +26,13 @@ def main() -> None:
         except (json.JSONDecodeError, ValueError):
             pass
 
-    if not meta_lines:
-        print("WARNING: no metadata line found, leaving session intact")
-        return
-
     old_count = len(lines)
-    SESSION_FILE.write_text(meta_lines[0])
-    print(f"Briefing session cleared: {old_count} lines → 1")
+    if meta_lines:
+        SESSION_FILE.write_text(meta_lines[0])
+        print(f"Briefing session cleared: {old_count} lines → 1 (metadata kept)")
+    else:
+        SESSION_FILE.write_text("")
+        print(f"Briefing session cleared: {old_count} lines → 0 (no metadata found, truncated)")
 
 if __name__ == "__main__":
     main()

@@ -242,7 +242,7 @@ def import_session(db: sqlite3.Connection, session: dict, project: str, dry_run:
 
 def run_project(project: str, jsonl_dir: Path, db: sqlite3.Connection, dry_run: bool) -> dict:
     """Import all JSONL files for one project. Returns totals dict."""
-    files = sorted(jsonl_dir.glob("*.jsonl"))
+    files = sorted(jsonl_dir.rglob("*.jsonl"))
     print(f"\n── {project} ({len(files)} files, {jsonl_dir.name}) ──")
 
     totals = {"sessions": 0, "user_prompts": 0, "asst_responses": 0, "skipped": 0, "empty": 0}
