@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""
+voxtral - Mistral Voxtral TTS CLI
+Usage: voxtral "text to speak" [-v voice] [-o /tmp/out.mp3]
+
+Voices: margaret, nick, angele, sanchit, gustavo, khyathi, yassir, patrick
+"""
+import argparse
+import hashlib
+import os
+import sys
+import httpx
+from pathlib import Path
+
+VOICES = ["margaret", "nick", "angele", "sanchit", "gustavo", "khyathi", "yassir", "patrick"]
+MODEL = "voxtral"
+API_URL = "https://api.mistral.ai/v1/audio/speech"
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Mistral Voxtral TTS")
+    parser.add_argument("text", help="Text to synthesize")
+    parser.add_argument("-v", "--voice", default="margaret",
+                        help=f"Voice name. Options: {', '.join(VOICES)}")
+    parser.add_argument("-o", "--output",
+                        help="Output file path (default: /tmp/voxtral_<hash>.mp3)")
+    parser.add_argument("-m", "--model", default=MODEL,
+                        help=f"Model name (default: {MODEL})")
+    parser.add_argument("--format", default="mp3", choices=["mp3", "wav"],
+                        help="Audio format (default: mp3)")
+    args = parser.parse_args()
+
+    api_key = os.environ.get("MISTRAL_API_KEY")
+    if not api_key:
+        print("Error: MISTRAL_API_KEY not set", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.output:
+        h = hashlib.md5(args.text.encode()).hexdigest()[:8]
+        args.output = f"/tmp/voxtral_{h}.{args.format}"
+
+    try:
+        r = httpx.post(
+            API_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": args.model,
+                "input": args.text,
+                "voice": args.voice,
+                "response_format": args.format,
+            },
+            timeout=60.0,
+        )
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        print(f"API error {e.response.status_code}: {e.response.text}", file=sys.stderr)
+        sys.exit(1)
+    except httpx.RequestError as e:
+        print(f"Request failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    Path(args.output).write_bytes(r.content)
+    print(args.output)
+
+
+if __name__ == "__main__":
+    main()

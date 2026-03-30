@@ -275,6 +275,26 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 
 ---
 
+## --voice Flag (Voice Note Output)
+
+When the user appends `--voice` to any coding agent request, or says "send as voice note" / "read that to me":
+
+1. Capture the agent's completion summary (from `process:log` or your own summary)
+2. Strip markdown, code blocks — keep only the prose result (max ~1,500 chars)
+3. Generate audio via voxtral-tts skill:
+   ```bash
+   FILE=$(uv run /path/to/voxtral-tts/scripts/voxtral -v nick "Summary text here")
+   ```
+4. Send as media to the originating channel:
+   ```json
+   { "action": "send", "channel": "discord", "to": "channel:<id>", "media": "file:///tmp/voxtral_xxx.mp3" }
+   ```
+
+**Applies to all agents:** Claude Code, Codex, OpenCode, Pi, Antigravity, or any future agent.
+Requires `MISTRAL_API_KEY` in env. See voxtral-tts skill for full docs.
+
+---
+
 ## Learnings (Jan 2026)
 
 - **PTY is essential:** Coding agents are interactive terminal apps. Without `pty:true`, output breaks or agent hangs.
