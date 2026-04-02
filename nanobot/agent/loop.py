@@ -424,8 +424,20 @@ class AgentLoop:
         _cm = self.claude_mem
         _session_key = msg.session_key
         _pnum = bg_prompt_number
+        _sessions = self.sessions
 
         async def _log_bg_response(text: str) -> None:
+            # Persist assistant response to session history
+            try:
+                _sess = _sessions.get_or_create(_session_key)
+                _sess.messages.append({
+                    "role": "assistant",
+                    "content": text,
+                    "timestamp": __import__("datetime").datetime.now().isoformat(),
+                })
+                _sessions.save(_sess)
+            except Exception:
+                pass
             if _cm and _pnum:
                 await _cm.log_response(_session_key, _pnum, text)
 
