@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.skills import SkillsLoader
+from nanobot.agent.tools.filesystem import DOCUMENT_EXTENSIONS, convert_doc_to_markdown
 
 if TYPE_CHECKING:
     from nanobot.config.schema import PersonalityConfig
@@ -174,22 +175,28 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         ]
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+        """Build user message content with optional base64-encoded images or converted documents."""
         if not media:
             return text
-        
-        images = []
+
+        content_parts: list[dict[str, Any]] = []
         for path in media:
             p = Path(path)
-            mime, _ = mimetypes.guess_type(path)
-            if not p.is_file() or not mime or not mime.startswith("image/"):
+            if not p.is_file():
                 continue
-            b64 = base64.b64encode(p.read_bytes()).decode()
-            images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-        
-        if not images:
+            if p.suffix.lower() in DOCUMENT_EXTENSIONS:
+                markdown = convert_doc_to_markdown(p)
+                content_parts.append({"type": "text", "text": f"[Attached: {p.name}]\n\n{markdown}"})
+            else:
+                mime, _ = mimetypes.guess_type(path)
+                if mime and mime.startswith("image/"):
+                    b64 = base64.b64encode(p.read_bytes()).decode()
+                    content_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+
+        if not content_parts:
             return text
-        return images + [{"type": "text", "text": text}]
+        content_parts.append({"type": "text", "text": text})
+        return content_parts
     
     def add_tool_result(
         self, messages: list[dict[str, Any]],

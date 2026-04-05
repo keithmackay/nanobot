@@ -6,6 +6,30 @@ from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
+# File extensions that should be converted to Markdown before returning
+DOCUMENT_EXTENSIONS = frozenset({
+    ".pdf", ".docx", ".doc", ".xlsx", ".xls",
+    ".pptx", ".ppt", ".odt", ".ods", ".odp", ".epub",
+})
+
+
+def convert_doc_to_markdown(file_path: Path) -> str:
+    """Convert a document file to Markdown using MarkItDown.
+
+    Returns the markdown text, or an error string if conversion fails.
+    """
+    try:
+        from markitdown import MarkItDown  # type: ignore[import]
+        result = MarkItDown().convert(str(file_path))
+        return result.text_content
+    except ImportError:
+        return (
+            f"Error: Cannot read {file_path.suffix} files without markitdown. "
+            "Install it with: uv add 'markitdown[all]'"
+        )
+    except Exception as e:
+        return f"Error converting {file_path.name} to markdown: {e}"
+
 
 def _resolve_path(path: str, workspace: Path | None = None, allowed_dir: Path | None = None) -> Path:
     """Resolve path against workspace (if relative) and enforce directory restriction."""
@@ -56,6 +80,9 @@ class ReadFileTool(Tool):
                 return f"Error: File not found: {path}"
             if not file_path.is_file():
                 return f"Error: Not a file: {path}"
+
+            if file_path.suffix.lower() in DOCUMENT_EXTENSIONS:
+                return convert_doc_to_markdown(file_path)
 
             content = file_path.read_text(encoding="utf-8")
             return content
