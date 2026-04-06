@@ -2,7 +2,7 @@
 """
 backfill_all.py — Comprehensive ChromaDB backfill for all conversation sources.
 
-Handles four source types:
+Handles five source types:
   1. Claude Code JSONL gap — session files newer than what's in Chroma
      (fills the window when claude-mem worker was down)
   2. Nanobot Discord sessions — ~/.nanobot/workspace/sessions/discord_*.jsonl
@@ -10,14 +10,16 @@ Handles four source types:
   3. Nanobot Telegram sessions — ~/.nanobot/workspace/sessions/telegram_*.jsonl
   4. SQLite multi-project — user_prompts + assistant_responses from all projects
      in claude-mem SQLite (user-root, foo, iswear, admin, home-assistant, etc.)
+  5. KeithVault — Obsidian .md notes with obstagger frontmatter (context field
+     present). Includes taxonomy metadata for filtered retrieval.
 
 All sources go into cm__nanobot. OpenClaw Discord history is not recoverable from
 files (sessions.json is state-only; per-session JSONLs were cleared).
 
 Usage:
-  python3 scripts/backfill_all.py [--dry-run] [--source all|jsonl|discord|telegram|sqlite]
+  python3 scripts/backfill_all.py [--dry-run] [--source all|jsonl|discord|telegram|sqlite|vault]
   python3 scripts/backfill_all.py --dry-run        # show counts, no writes
-  python3 scripts/backfill_all.py --source sqlite  # only SQLite multi-project
+  python3 scripts/backfill_all.py --source vault   # only KeithVault notes
 
 Requirements: chromadb (uvx --with chromadb python3 scripts/backfill_all.py)
 """
@@ -45,6 +47,7 @@ NANOBOT_SESSIONS_DIR = Path.home() / ".nanobot/workspace/sessions"
 NANOBOT_CONFIG = Path.home() / ".nanobot/config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude/projects"
 CLAUDE_MEM_DB = Path.home() / ".claude-mem/claude-mem.db"
+KEITHVAULT_DIR = Path.home() / "KeithVault"
 
 # Min file mtime to consider for JSONL gap backfill (last known SQLite entry ~Mar 7)
 JSONL_GAP_SINCE_EPOCH = 1741305600  # 2026-03-07 00:00 UTC
@@ -567,13 +570,163 @@ def backfill_sqlite_projects(collection, existing_ids: set[str], dry_run: bool) 
     return added
 
 
+# ── Source 5: KeithVault Obsidian notes ───────────────────────────────────────
+
+def _parse_frontmatter(content: str) -> tuple[dict, str]:
+    """
+    Parse YAML frontmatter from an Obsidian note. No external YAML library needed.
+    Returns (fields_dict, body_text). Handles scalar values, YAML lists (indented
+    dash format), and inline lists ([item, item]).
+    """
+    if not content.startswith("---"):
+        return {}, content
+
+    end = content.find("\n---", 3)
+    if end == -1:
+        return {}, content
+
+    fm_text = content[3:end]
+    body = content[end + 4:].strip()
+
+    fields: dict = {}
+    lines = fm_text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+
+        if ":" not in stripped:
+            i += 1
+            continue
+
+        colon = stripped.index(":")
+        key = stripped[:colon].strip()
+        value_part = stripped[colon + 1:].strip()
+
+        if value_part == "":
+            # Possible indented list follows
+            items = []
+            i += 1
+            while i < len(lines) and lines[i].startswith("  "):
+                item = lines[i].strip()
+                if item.startswith("- "):
+                    items.append(item[2:].strip().strip('"\''))
+                i += 1
+            fields[key] = items
+            continue
+        elif value_part.startswith("["):
+            inner = value_part.strip("[]")
+            fields[key] = [x.strip().strip('"\'') for x in inner.split(",") if x.strip()]
+        else:
+            fields[key] = value_part.strip('"\'')
+
+        i += 1
+
+    return fields, body
+
+
+def backfill_vault(collection, existing_ids: set[str], dry_run: bool) -> int:
+    """
+    Embed KeithVault Obsidian notes that have obstagger frontmatter (context field
+    set). Includes taxonomy fields as metadata for filtered retrieval by personality
+    bots. ID is stable across reruns — based on relative path within the vault.
+    """
+    print(f"\n── KeithVault backfill ({KEITHVAULT_DIR}) ──")
+
+    if not KEITHVAULT_DIR.exists():
+        print(f"  KeithVault not found at {KEITHVAULT_DIR}")
+        return 0
+
+    all_files = [
+        f for f in KEITHVAULT_DIR.rglob("*.md")
+        if not any(part.startswith(".") for part in f.parts)
+    ]
+    print(f"  {len(all_files)} .md files found")
+
+    docs = []
+    skipped_no_context = 0
+    skipped_existing = 0
+
+    for path in all_files:
+        try:
+            content = path.read_text(errors="replace")
+        except Exception:
+            continue
+
+        fields, body = _parse_frontmatter(content)
+
+        # Only process notes with a context field (obstagger-tagged)
+        context = fields.get("context", "")
+        if not context:
+            skipped_no_context += 1
+            continue
+
+        # Normalize list fields to strings for metadata (ChromaDB metadata must be scalar)
+        def to_str(v) -> str:
+            return ", ".join(v) if isinstance(v, list) else str(v)
+
+        context_str = to_str(context)
+        type_str = to_str(fields.get("type", ""))
+        subtype_str = to_str(fields.get("subtype", ""))
+        tags_str = to_str(fields.get("tags", []))
+        created_str = to_str(fields.get("created", ""))
+
+        # Stable doc ID from relative path
+        rel_path = str(path.relative_to(KEITHVAULT_DIR))
+        doc_id = f"vault_{hashlib.md5(rel_path.encode()).hexdigest()[:16]}"
+
+        if doc_id in existing_ids:
+            skipped_existing += 1
+            continue
+
+        # Build text: title + taxonomy header + body (gives semantic richness)
+        body_stripped = body.strip()
+        text_parts = [f"[KeithVault: {path.stem}]"]
+        text_parts.append(f"context: {context_str} | type: {type_str} | subtype: {subtype_str}")
+        if tags_str:
+            text_parts.append(f"tags: {tags_str}")
+        if body_stripped:
+            text_parts.append(body_stripped)
+        text = "\n".join(text_parts)
+
+        docs.append({
+            "id": doc_id,
+            "text": text,
+            "metadata": {
+                "doc_type": "obsidian_note",
+                "source": "keithvault",
+                "path": rel_path,
+                "title": path.stem,
+                "context": context_str,
+                "type": type_str,
+                "subtype": subtype_str,
+                "tags": tags_str,
+                "created": created_str,
+            },
+        })
+
+    print(f"  {len(docs)} new docs to embed, {skipped_existing} already in Chroma, "
+          f"{skipped_no_context} without context field")
+
+    if dry_run:
+        print(f"  [dry-run] Would add {len(docs)} docs")
+        return len(docs)
+
+    added = upsert_docs(collection, docs, dry_run=False)
+    print(f"  ✓ Added {added} docs")
+    return added
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="Show counts, no writes")
     parser.add_argument("--source", default="all",
-                        choices=["all", "jsonl", "discord", "telegram", "sqlite"],
+                        choices=["all", "jsonl", "discord", "telegram", "sqlite", "vault"],
                         help="Which source to backfill (default: all)")
     args = parser.parse_args()
 
@@ -629,6 +782,9 @@ def main():
 
     if args.source in ("all", "sqlite"):
         total_added += backfill_sqlite_projects(collection, existing_ids, args.dry_run)
+
+    if args.source in ("all", "vault"):
+        total_added += backfill_vault(collection, existing_ids, args.dry_run)
 
     print(f"\n{'[dry-run] Would add' if args.dry_run else 'Total added:'} {total_added} docs")
     if not args.dry_run:
