@@ -609,6 +609,14 @@ class AgentLoop:
         personality = (msg.metadata or {}).get("personality")
         personality_config = self.personalities.get(personality) if personality else None
 
+        # Vault context — pre-load personality-relevant KeithVault notes (always active when configured)
+        vault_context: str | None = None
+        if self.chroma_mem and personality_config and personality_config.vault_seed_query:
+            vault_context = await self.chroma_mem.get_vault_context(
+                seed_query=personality_config.vault_seed_query,
+                n_results=personality_config.vault_top_k,
+            )
+
         history = session.get_history(max_messages=self.memory_window)
 
         # Try LCM assembler first; fall back to legacy session history if unavailable
@@ -668,6 +676,7 @@ class AgentLoop:
                 message_id=(msg.metadata or {}).get("message_id"),
                 persistent_context=persistent_context,
                 semantic_context=semantic_context,
+                vault_context=vault_context,
                 personality=personality,
                 personality_config=personality_config,
             )
@@ -680,6 +689,7 @@ class AgentLoop:
                 message_id=(msg.metadata or {}).get("message_id"),
                 persistent_context=persistent_context,
                 semantic_context=semantic_context,
+                vault_context=vault_context,
                 personality=personality,
                 personality_config=personality_config,
             )

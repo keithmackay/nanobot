@@ -125,3 +125,64 @@ class ChromaMemClient:
             lines.append(f"- [{label}] {snippet}")
 
         return "# Relevant Past Context\n\n" + "\n".join(lines)
+
+    async def get_vault_context(
+        self,
+        seed_query: str,
+        n_results: int = 15,
+    ) -> str | None:
+        """Fetch KeithVault notes semantically relevant to a personality's domain.
+
+        Uses the seed_query to rank vault notes by relevance. Filters to only
+        vault notes (source == keithvault) so conversation history is excluded.
+        Returns a formatted block for injection into the system prompt.
+        """
+        col = self._get_collection()
+        if col is None:
+            return None
+
+        embedding = await asyncio.to_thread(self._embed_sync, seed_query)
+        if embedding is None:
+            return None
+
+        try:
+            count = col.count()
+            if count == 0:
+                return None
+            n = min(n_results, count)
+
+            def _query() -> Any:
+                return col.query(
+                    query_embeddings=[embedding],
+                    n_results=n,
+                    include=["documents", "metadatas"],
+                    where={"source": {"$eq": "keithvault"}},
+                )
+
+            results = await asyncio.to_thread(_query)
+        except Exception as e:
+            logger.debug("ChromaMemClient: vault context query failed: {}", e)
+            return None
+
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
+
+        if not docs:
+            return None
+
+        lines = []
+        for doc, meta in zip(docs, metas):
+            title = (meta or {}).get("title", "Note")
+            context = (meta or {}).get("context", "")
+            note_type = (meta or {}).get("type", "")
+            # Doc text starts with "[KeithVault: title]\ncontext: ...\ntags: ...\n{body}"
+            # Skip the header lines to get the actual body for the snippet
+            body_lines = doc.split("\n")
+            body_start = next(
+                (i for i, l in enumerate(body_lines) if not l.startswith("[KeithVault") and not l.startswith("context:") and not l.startswith("tags:") and l.strip()),
+                0,
+            )
+            snippet = " ".join(body_lines[body_start:])[:400].strip()
+            lines.append(f"**{title}** ({context} / {note_type}): {snippet}")
+
+        return "# Vault Context — Your Knowledge Base\n\n" + "\n\n".join(lines)

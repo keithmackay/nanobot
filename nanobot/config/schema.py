@@ -62,6 +62,8 @@ class PersonalityConfig(Base):
     denied_skills: list[str] = Field(default_factory=list)   # Always exclude these skills
     model: str | None = None        # Override LLM model for this personality
     temperature: float | None = None  # Override temperature for this personality
+    vault_seed_query: str | None = None  # If set, pre-loads semantically relevant KeithVault notes
+    vault_top_k: int = 15           # Number of vault notes to pre-load per turn
 
 
 class DiscordChannelRule(Base):
