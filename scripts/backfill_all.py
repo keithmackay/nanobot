@@ -36,7 +36,7 @@ from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-OLLAMA_URL = "http://192.168.1.8:11434/api/embed"
+OLLAMA_URL = "http://192.168.1.11:11434/api/embed"
 EMBED_MODEL = "nomic-embed-text"
 MAX_CHARS = 2000
 BATCH_SIZE = 50
