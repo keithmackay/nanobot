@@ -72,11 +72,23 @@ class ChromaMemClient:
             logger.debug("ChromaMemClient: Ollama embed failed ({}): {}", self.ollama_url, e)
             return None
 
-    async def search(self, query: str) -> str | None:
+    async def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        max_distance: float | None = None,
+    ) -> str | None:
         """Search ChromaDB for semantically similar past content.
 
+        Args:
+            query: The search query text.
+            top_k: Max results to return. Defaults to self.top_k.
+            max_distance: Only include results with ChromaDB distance ≤ this value.
+                Distance is squared L2; ~0.3 = very similar, ~0.6 = loosely related,
+                >0.8 = probably irrelevant. None = no threshold (return all top_k).
+
         Returns a formatted string of relevant snippets, or None if unavailable
-        or no relevant results found.
+        or no results pass the threshold.
         """
         col = self._get_collection()
         if col is None:
@@ -86,17 +98,19 @@ class ChromaMemClient:
         if embedding is None:
             return None
 
+        k = top_k if top_k is not None else self.top_k
+
         try:
             count = col.count()
             if count == 0:
                 return None
-            n = min(self.top_k, count)
+            n = min(k, count)
 
             def _query() -> Any:
                 return col.query(
                     query_embeddings=[embedding],
                     n_results=n,
-                    include=["documents", "metadatas"],
+                    include=["documents", "metadatas", "distances"],
                 )
 
             results = await asyncio.to_thread(_query)
@@ -106,6 +120,7 @@ class ChromaMemClient:
 
         docs = results.get("documents", [[]])[0]
         metas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
 
         if not docs:
             return None
@@ -118,11 +133,16 @@ class ChromaMemClient:
         }
 
         lines = []
-        for doc, meta in zip(docs, metas):
+        for doc, meta, dist in zip(docs, metas, distances):
+            if max_distance is not None and dist > max_distance:
+                continue
             doc_type = (meta or {}).get("doc_type", "")
             label = _TYPE_LABELS.get(doc_type, "Past context")
             snippet = doc[:300].replace("\n", " ").strip()
             lines.append(f"- [{label}] {snippet}")
+
+        if not lines:
+            return None
 
         return "# Relevant Past Context\n\n" + "\n".join(lines)
 

@@ -48,13 +48,46 @@ class AgentLoop:
 
     _TOOL_RESULT_MAX_CHARS = 500
 
-    # Phrases that signal the user wants to retrieve past/historical context.
-    # Only when one of these appears will semantic memory search be triggered.
+    # ── Semantic memory trigger tiers ────────────────────────────────────────
+    # Each tier maps to a (top_k, max_distance) config for ChromaDB search.
+    # max_distance is squared L2: ~0.35 = very close, ~0.55 = related, ~0.70 = loose.
+    # Higher tier = broader search; lower tier = tighter relevance gate.
+
+    # Tier 1 — Explicit recall: user is directly asking to retrieve past context.
+    # Broadest search: more results, looser threshold.
     _MEMORY_TRIGGERS = frozenset([
         "remember", "memory", "remind", "recall",
         "past", "old", "used to", "before", "previously",
         "earlier", "look back", "what we did", "review",
         "thought", "history",
+    ])
+
+    # Tier 2 — Continuation: resuming prior work or referencing an ongoing task.
+    # Good recall needed; moderate threshold.
+    _CONTINUATION_TRIGGERS = frozenset([
+        "continue", "resume", "keep going", "pick up", "where were we",
+        "what's next", "next step", "last time", "we were", "still working",
+        "finish", "following up", "back to",
+    ])
+
+    # Tier 3 — Preference/habit: asking about patterns, personal style, defaults.
+    # Focused search; moderate threshold.
+    _PREFERENCE_TRIGGERS = frozenset([
+        "usually", "normally", "typically", "my preference", "do i ",
+        "do you know my", "what do i ", "how do i usually", "my approach",
+        "my default", "i tend to",
+    ])
+
+    # Tier 4 — Factual question: open question that may be answerable from the
+    # knowledge base. Tight threshold so only genuinely relevant results inject.
+    # Covers cases like "when should I plant tomatoes?" or "how does X work?".
+    _FACTUAL_TRIGGERS = frozenset([
+        "what is ", "what are ", "what was ", "what were ",
+        "when should", "when do ", "when did ", "when is ",
+        "how do ", "how does ", "how did ", "how should ",
+        "where is ", "where do ", "who is ", "why is ", "why do ",
+        "should i ", "can you ", "tell me about", "explain ", "describe ",
+        "which is ", "which are ",
     ])
 
     def __init__(
@@ -182,10 +215,25 @@ class AgentLoop:
             self._mcp_connecting = False
 
     @classmethod
-    def _needs_memory_search(cls, text: str) -> bool:
-        """Return True if the message contains a memory-retrieval trigger phrase."""
+    def _memory_search_config(cls, text: str) -> tuple[int, float] | None:
+        """Return (top_k, max_distance) for ChromaDB search, or None to skip.
+
+        Tiers (broadest → narrowest):
+          Explicit recall  → (5, 0.70)  — cast wide net, user is asking directly
+          Continuation     → (5, 0.60)  — good recall, resuming prior work
+          Preference/habit → (3, 0.55)  — focused, personal patterns
+          Factual question → (3, 0.40)  — tight gate, only inject if clearly relevant
+        """
         lower = text.lower()
-        return any(trigger in lower for trigger in cls._MEMORY_TRIGGERS)
+        if any(t in lower for t in cls._MEMORY_TRIGGERS):
+            return (5, 0.70)
+        if any(t in lower for t in cls._CONTINUATION_TRIGGERS):
+            return (5, 0.60)
+        if any(t in lower for t in cls._PREFERENCE_TRIGGERS):
+            return (3, 0.55)
+        if any(t in lower for t in cls._FACTUAL_TRIGGERS):
+            return (3, 0.40)
+        return None
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
@@ -601,10 +649,15 @@ class AgentLoop:
             prompt_number = await self.claude_mem.log_turn(key, msg.content)
             persistent_context = await self.claude_mem.get_context()
 
-        # Semantic memory retrieval — only when message contains a memory trigger phrase
+        # Semantic memory retrieval — tiered by message intent
         semantic_context: str | None = None
-        if self.chroma_mem and self._needs_memory_search(msg.content):
-            semantic_context = await self.chroma_mem.search(msg.content)
+        if self.chroma_mem:
+            _search_cfg = self._memory_search_config(msg.content)
+            if _search_cfg is not None:
+                _top_k, _max_dist = _search_cfg
+                semantic_context = await self.chroma_mem.search(
+                    msg.content, top_k=_top_k, max_distance=_max_dist
+                )
 
         personality = (msg.metadata or {}).get("personality")
         personality_config = self.personalities.get(personality) if personality else None
