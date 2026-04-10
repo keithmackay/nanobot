@@ -301,6 +301,21 @@ class ChromaMemConfig(Base):
     model: str = "nomic-embed-text"
 
 
+class MemPalaceConfig(Base):
+    """MemPalace structured memory fallback configuration.
+
+    Disabled by default until the palace has been initialised and mined.
+    Run: mempalace init ~/Projects/nanobot && mempalace mine ~/Projects/nanobot
+    """
+
+    enabled: bool = False
+    palace_path: str = "~/.mempalace/palace"
+    kg_db_path: str = "~/.mempalace/knowledge_graph.sqlite3"
+    # Trigger fallback search when ChromaDB best_distance exceeds this value.
+    fallback_threshold: float = 0.45
+    search_top_k: int = 3
+
+
 
 class RoutingConfig(Base):
     """Model routing — haiku classifies each message to select the right tier."""
@@ -395,6 +410,7 @@ class Config(BaseSettings):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     claude_mem: ClaudeMemConfig = Field(default_factory=ClaudeMemConfig)
     chroma_mem: ChromaMemConfig = Field(default_factory=ChromaMemConfig)
+    mempalace: MemPalaceConfig = Field(default_factory=MemPalaceConfig)
     personalities: dict[str, PersonalityConfig] = Field(default_factory=dict)  # Named personality configs
     tasks: TasksConfig = Field(default_factory=TasksConfig)
     routing: RoutingConfig = Field(default_factory=RoutingConfig)

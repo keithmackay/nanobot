@@ -326,6 +326,16 @@ def gateway(
             model=config.chroma_mem.model,
         )
 
+    # MemPalace structured memory fallback
+    mempalace = None
+    if config.mempalace.enabled:
+        from nanobot.agent.mempalace import MemPalaceClient
+        mempalace = MemPalaceClient(
+            palace_path=config.mempalace.palace_path,
+            kg_db_path=config.mempalace.kg_db_path,
+            search_top_k=config.mempalace.search_top_k,
+        )
+
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
@@ -368,9 +378,10 @@ def gateway(
         personalities={k: v for k, v in config.personalities.items()},
         claude_mem=claude_mem,
         chroma_mem=chroma_mem,
+        mempalace=mempalace,
         model_router=model_router,
     )
-    
+
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job — shell command or agent turn."""

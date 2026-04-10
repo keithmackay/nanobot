@@ -109,6 +109,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         claude_mem: Any | None = None,
         chroma_mem: Any | None = None,
+        mempalace: Any | None = None,
         health_service: HealthService | None = None,
         personalities: dict | None = None,
         task_orchestrator: "TaskOrchestrator | None" = None,
@@ -118,6 +119,7 @@ class AgentLoop:
         self.bus = bus
         self.claude_mem = claude_mem
         self.chroma_mem = chroma_mem
+        self.mempalace = mempalace
         self.channels_config = channels_config
         self.personalities = personalities or {}
         self.task_orchestrator = task_orchestrator
@@ -213,6 +215,12 @@ class AgentLoop:
                 self._mcp_stack = None
         finally:
             self._mcp_connecting = False
+
+    @classmethod
+    def _should_query_kg(cls, text: str) -> bool:
+        """Return True for tier-1 explicit recall queries — worth checking the KG."""
+        lower = text.lower()
+        return any(t in lower for t in cls._MEMORY_TRIGGERS)
 
     @classmethod
     def _memory_search_config(cls, text: str) -> tuple[int, float] | None:
@@ -651,13 +659,26 @@ class AgentLoop:
 
         # Semantic memory retrieval — tiered by message intent
         semantic_context: str | None = None
-        if self.chroma_mem:
-            _search_cfg = self._memory_search_config(msg.content)
-            if _search_cfg is not None:
-                _top_k, _max_dist = _search_cfg
-                semantic_context = await self.chroma_mem.search(
-                    msg.content, top_k=_top_k, max_distance=_max_dist
-                )
+        _best_distance = float("inf")
+        _search_cfg = self._memory_search_config(msg.content)
+        if self.chroma_mem and _search_cfg is not None:
+            _top_k, _max_dist = _search_cfg
+            semantic_context, _best_distance = await self.chroma_mem.search(
+                msg.content, top_k=_top_k, max_distance=_max_dist
+            )
+
+        # MemPalace fallback — fires when ChromaDB has no strong match
+        if self.mempalace and _search_cfg is not None and _best_distance > self.mempalace.FALLBACK_THRESHOLD:
+            mp_text = await self.mempalace.search(msg.content)
+            if mp_text:
+                semantic_context = (semantic_context + "\n\n" + mp_text) if semantic_context else mp_text
+
+        # MemPalace KG — for explicit recall queries, also look up entities in the knowledge graph
+        if self.mempalace and self._should_query_kg(msg.content):
+            for entity in self.mempalace.extract_entities(msg.content):
+                kg_text = await self.mempalace.kg_query(entity)
+                if kg_text:
+                    semantic_context = (semantic_context + "\n\n" + kg_text) if semantic_context else kg_text
 
         personality = (msg.metadata or {}).get("personality")
         personality_config = self.personalities.get(personality) if personality else None

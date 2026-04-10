@@ -24,7 +24,9 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.request
@@ -47,6 +49,15 @@ EMBED_BATCH_SIZE = 50
 EMBED_TIMEOUT = 60
 
 CLEANUP_AGE_DAYS = 7  # only delete JSONL files older than this
+
+# ── MemPalace config ────────────────────────────────────────────────────────────
+# Directories to mine into the MemPalace palace (project files and vault notes).
+# Conversation history is handled by our own JSONL pipeline above; MemPalace
+# mining here is for code, docs, and markdown notes only.
+MEMPALACE_MINE_TARGETS: list[Path] = [
+    HOME / "Projects/nanobot",
+    HOME / "KeithVault",
+]
 
 # Known slug → project name. The maintenance script uses this to:
 #   a) import JSONL for known projects
@@ -428,6 +439,41 @@ def cleanup_old_jsonl(dry_run: bool) -> dict:
     return counts
 
 
+# ── Step 5: Mine MemPalace ─────────────────────────────────────────────────────
+
+def mine_mempalace(dry_run: bool) -> None:
+    """Mine project files and vault notes into the MemPalace palace.
+
+    Uses the default mining mode (project files + markdown docs).
+    Skips targets that don't exist or if mempalace is not on PATH.
+    """
+    if not shutil.which("mempalace"):
+        log("  [skip] mempalace not in PATH — install with: pip install mempalace")
+        return
+
+    for target in MEMPALACE_MINE_TARGETS:
+        if not target.exists():
+            log(f"  [skip] {target} — does not exist")
+            continue
+        cmd = ["mempalace", "mine", str(target)]
+        if dry_run:
+            log(f"  [dry-run] Would run: {' '.join(cmd)}")
+            continue
+        log(f"  Mining {target.name}...")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            summary = (result.stdout or result.stderr or "").strip()
+            summary_line = summary.splitlines()[0][:120] if summary else "(no output)"
+            if result.returncode == 0:
+                log(f"  ✓ {target.name}: {summary_line}")
+            else:
+                log(f"  ✗ {target.name} (exit {result.returncode}): {summary_line}")
+        except subprocess.TimeoutExpired:
+            log(f"  ✗ {target.name}: timed out after 300s")
+        except Exception as e:
+            log(f"  ✗ {target.name}: {e}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
@@ -436,6 +482,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="Show what would happen, no writes")
     ap.add_argument("--skip-embed", action="store_true", help="Skip ChromaDB embedding step")
     ap.add_argument("--skip-cleanup", action="store_true", help="Skip JSONL cleanup step")
+    ap.add_argument("--skip-mempalace", action="store_true", help="Skip MemPalace mining step")
     args = ap.parse_args()
 
     mode = "DRY RUN" if args.dry_run else "LIVE"
@@ -512,6 +559,14 @@ def main():
             f"Kept (too new): {counts['kept_too_new']}")
     else:
         log("── Step 4: Cleanup skipped (--skip-cleanup) ──")
+    log("")
+
+    # ── 5. Mine MemPalace ──
+    if not args.skip_mempalace:
+        log("── Step 5: Mine MemPalace palace ──")
+        mine_mempalace(args.dry_run)
+    else:
+        log("── Step 5: MemPalace mining skipped (--skip-mempalace) ──")
     log("")
 
     log("── Done ──")

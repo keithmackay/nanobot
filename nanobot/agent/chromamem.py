@@ -77,7 +77,7 @@ class ChromaMemClient:
         query: str,
         top_k: int | None = None,
         max_distance: float | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, float]:
         """Search ChromaDB for semantically similar past content.
 
         Args:
@@ -87,23 +87,26 @@ class ChromaMemClient:
                 Distance is squared L2; ~0.3 = very similar, ~0.6 = loosely related,
                 >0.8 = probably irrelevant. None = no threshold (return all top_k).
 
-        Returns a formatted string of relevant snippets, or None if unavailable
-        or no results pass the threshold.
+        Returns:
+            (result_text, best_distance) where best_distance is the lowest distance
+            seen across ALL queried results (before max_distance filtering), so the
+            caller can decide whether to fall back to MemPalace. Returns float('inf')
+            if the collection is empty or unavailable.
         """
         col = self._get_collection()
         if col is None:
-            return None
+            return (None, float("inf"))
 
         embedding = await asyncio.to_thread(self._embed_sync, query)
         if embedding is None:
-            return None
+            return (None, float("inf"))
 
         k = top_k if top_k is not None else self.top_k
 
         try:
             count = col.count()
             if count == 0:
-                return None
+                return (None, float("inf"))
             n = min(k, count)
 
             def _query() -> Any:
@@ -116,14 +119,18 @@ class ChromaMemClient:
             results = await asyncio.to_thread(_query)
         except Exception as e:
             logger.debug("ChromaMemClient: query failed: {}", e)
-            return None
+            return (None, float("inf"))
 
         docs = results.get("documents", [[]])[0]
         metas = results.get("metadatas", [[]])[0]
         distances = results.get("distances", [[]])[0]
 
         if not docs:
-            return None
+            return (None, float("inf"))
+
+        # best_distance tracks the closest match seen BEFORE threshold filtering,
+        # so the caller can decide whether to fall back to MemPalace.
+        best_distance = min(distances) if distances else float("inf")
 
         _TYPE_LABELS = {
             "user_prompt": "You asked",
@@ -142,9 +149,9 @@ class ChromaMemClient:
             lines.append(f"- [{label}] {snippet}")
 
         if not lines:
-            return None
+            return (None, best_distance)
 
-        return "# Relevant Past Context\n\n" + "\n".join(lines)
+        return ("# Relevant Past Context\n\n" + "\n".join(lines), best_distance)
 
     async def get_vault_context(
         self,
