@@ -67,7 +67,6 @@ PROMPT_FILE="/tmp/briefing-prompt-$TODAY.txt"
     printf '   - Tasks We Could Finish Together Today (2-3 items Mac can help with)\n'
     printf '   - Jody Might Like (1-2 warm non-work items)\n'
     printf '   - Context Optimization Report (placeholder: "No context eval data available for today.")\n'
-    printf '\n7. After writing the file, send a Discord notification to channel 1472143342753153064 with a 1-line summary of today'\''s top story using the message tool.\n'
     printf '\nWrite the briefing now. Use the Write or Bash tool to write the full file to %s.\n' "$BRIEFING_PATH"
 } > "$PROMPT_FILE"
 
@@ -90,6 +89,31 @@ echo "[$TODAY $(date '+%H:%M:%S')] Claude exited with code $EXIT_CODE" | tee -a 
 # Verify file was written
 if [ -f "$BRIEFING_PATH" ] && grep -q "## The Big One" "$BRIEFING_PATH" 2>/dev/null; then
     echo "SUCCESS: Briefing written to $BRIEFING_PATH" | tee -a "$LOG"
+
+    # --- Send Discord notification via nanobot bot token ---
+    DISCORD_TOKEN=$(python3 -c "import json; print(json.load(open('/Users/keithmackay1/.nanobot/config.json'))['channels']['discord']['token'])" 2>/dev/null || echo "")
+    PENN_CHANNEL="1477444747046944929"
+
+    if [ -n "$DISCORD_TOKEN" ]; then
+        # Extract top story headline (Big One section title)
+        BIG_ONE=$(grep -A2 "## The Big One" "$BRIEFING_PATH" 2>/dev/null | tail -1 | sed 's/^[[:space:]]*//' | cut -c1-120)
+        MSG="📋 **Daily Briefing — ${DATE_FORMATTED}** is ready.\n**The Big One:** ${BIG_ONE}"
+
+        CURL_RESULT=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            "https://discord.com/api/v10/channels/${PENN_CHANNEL}/messages" \
+            -H "Authorization: Bot ${DISCORD_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"content\": \"${MSG}\"}")
+
+        if [ "$CURL_RESULT" = "200" ] || [ "$CURL_RESULT" = "201" ]; then
+            echo "Discord notification sent to Penn channel (HTTP $CURL_RESULT)" | tee -a "$LOG"
+        else
+            echo "Discord notification failed (HTTP $CURL_RESULT)" | tee -a "$LOG"
+        fi
+    else
+        echo "Discord token not found — skipping notification" | tee -a "$LOG"
+    fi
+
     exit 0
 else
     echo "ERROR: Briefing file missing or incomplete after claude run" | tee -a "$LOG"

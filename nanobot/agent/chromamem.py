@@ -21,7 +21,7 @@ class ChromaMemClient:
 
     def __init__(
         self,
-        ollama_url: str = "http://192.168.1.8:11434",
+        ollama_url: str = "http://192.168.86.21:11434",
         chroma_data_dir: str = "~/.claude-mem/vector-db",
         project: str = "nanobot",
         top_k: int = 5,

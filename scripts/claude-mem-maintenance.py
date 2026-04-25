@@ -42,7 +42,7 @@ CHROMA_DIR = HOME / ".claude-mem/vector-db"
 COLLECTION = "cm__nanobot"
 LOG_FILE = HOME / ".nanobot/logs/claude-mem-maintenance.log"
 
-OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://192.168.1.8:11434") + "/api/embed"
+OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", "http://192.168.86.21:11434") + "/api/embed"
 EMBED_MODEL = "nomic-embed-text"
 MAX_CHARS = 2000
 EMBED_BATCH_SIZE = 50
