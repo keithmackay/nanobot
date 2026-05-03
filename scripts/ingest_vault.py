@@ -140,7 +140,6 @@ def build_synthesis_prompt(
     return f"""You are a knowledge curator. Synthesize recent Discord conversations into a structured KeithVault wiki note.
 
 Personality: {personality} — {description}
-Note path: {note_path}
 Today: {today}
 {existing}
 Recent conversation ({len(messages)} messages):
@@ -148,10 +147,9 @@ Recent conversation ({len(messages)} messages):
 {conversation_text}
 ---
 
-Write a wiki note to {note_path} using the Bash tool (write the complete file content).
+Output ONLY the complete wiki note content (no commentary, no preamble). Start directly with the YAML frontmatter.
 
 The note MUST have this YAML frontmatter:
-```yaml
 ---
 context: personal
 type: wiki
@@ -164,7 +162,6 @@ interpreter: Claude
 created: "[[{today}]]"
 updated: "[[{today}]]"
 ---
-```
 
 After the frontmatter, write a structured markdown note with these sections (only include sections that have content):
 
@@ -191,7 +188,7 @@ Rules:
 - Omit sections that have nothing meaningful.
 - If updating an existing note, preserve prior knowledge that's still relevant.
 - Do not include raw conversation snippets — synthesize and abstract.
-- Write the file now using the Bash tool.
+- Output ONLY the note. No tool calls. No explanation. Start with the --- frontmatter delimiter.
 """
 
 
@@ -222,12 +219,23 @@ def ingest_personality(
             timeout=120,
             env={
                 "HOME": str(Path.home()),
+                "USER": Path.home().name,
                 "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
             },
         )
         if result.returncode != 0:
-            print(f"  [error] Claude exited {result.returncode} for {personality}: {result.stderr[:200]}", file=sys.stderr)
+            print(f"  [error] Claude exited {result.returncode} for {personality}: {result.stderr[:300]}", file=sys.stderr)
             return False
+
+        content = result.stdout.strip()
+        if not content or "---" not in content:
+            print(f"  [error] Claude returned empty or invalid output for {personality}", file=sys.stderr)
+            if result.stderr:
+                print(f"  [stderr] {result.stderr[:200]}", file=sys.stderr)
+            return False
+
+        note_path.write_text(content + "\n")
+        print(f"  Written: {note_path}")
         return True
     except subprocess.TimeoutExpired:
         print(f"  [error] Claude timed out for {personality}", file=sys.stderr)
