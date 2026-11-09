@@ -736,6 +736,37 @@ async def test_pause_stops_the_turn_and_resume_starts_it_again(setup):
 
 
 @pytest.mark.asyncio
+async def test_a_pause_arriving_while_the_dispatch_starts_holds_it_until_resume(setup):
+    receiver, agent, snugban = setup
+    snugban.ack_gate = asyncio.Event()
+    await receiver.handle(*signed(dispatch_payload()))
+    await asyncio.sleep(0.02)
+    status, _ = await receiver.handle(*signed({"type": "pause", "dispatchId": DISPATCH}))
+    assert status == 200
+    snugban.ack_gate.set()
+    await until(lambda: snugban.reports("ack"))
+    await asyncio.sleep(0.05)
+    assert agent.turns == []
+
+    status, _ = await receiver.handle(*signed({"type": "resume", "dispatchId": DISPATCH}))
+    assert status == 200
+    await until(lambda: len(agent.turns) == 1)
+    assert "Add a /health endpoint" in agent.turns[0].content
+
+
+@pytest.mark.asyncio
+async def test_a_pause_and_resume_while_the_dispatch_starts_leave_it_running(setup):
+    receiver, agent, snugban = setup
+    snugban.ack_gate = asyncio.Event()
+    await receiver.handle(*signed(dispatch_payload()))
+    await asyncio.sleep(0.02)
+    await receiver.handle(*signed({"type": "pause", "dispatchId": DISPATCH}))
+    await receiver.handle(*signed({"type": "resume", "dispatchId": DISPATCH}))
+    snugban.ack_gate.set()
+    await until(lambda: len(agent.turns) == 1)
+
+
+@pytest.mark.asyncio
 async def test_heartbeats_stop_while_paused(setup, tmp_path):
     _, agent, snugban = setup
     receiver = SnugbanReceiver(

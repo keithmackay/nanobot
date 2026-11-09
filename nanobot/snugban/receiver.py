@@ -121,6 +121,10 @@ class SnugbanReceiver:
         self._aborted = SeenIds(max_entries=1_000)
         self._runs: dict[str, _Run] = {}
         self._branch_locks: dict[str, asyncio.Lock] = {}
+        # Dispatches accepted but not yet running (being acknowledged, or waiting for an old run
+        # on their branch to stop), and those of them Keith paused meanwhile.
+        self._starting: set[str] = set()
+        self._paused_while_starting: set[str] = set()
         self._background: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
@@ -174,6 +178,7 @@ class SnugbanReceiver:
             "Snugban: dispatch {} for task {} on {}",
             dispatch.dispatch_id, dispatch.task_id, dispatch.branch,
         )
+        self._starting.add(dispatch.dispatch_id)
         self._in_background(self._take(dispatch))
         return 202, {"status": "accepted"}
 
@@ -206,6 +211,10 @@ class SnugbanReceiver:
 
     async def _on_pause(self, dispatch_id: str, now: float) -> Answer:
         run = self._live_run(dispatch_id)
+        if run is None and dispatch_id in self._starting:
+            logger.info("Snugban: dispatch {} paused before it started", dispatch_id)
+            self._paused_while_starting.add(dispatch_id)
+            return 200, {"status": "paused"}
         if run is None:
             return 404, {"error": f"nanobot is not running dispatch {dispatch_id}"}
         if not run.paused:
@@ -218,6 +227,9 @@ class SnugbanReceiver:
 
     async def _on_resume(self, dispatch_id: str, now: float) -> Answer:
         run = self._live_run(dispatch_id)
+        if run is None and dispatch_id in self._starting:
+            self._paused_while_starting.discard(dispatch_id)
+            return 200, {"status": "running"}
         if run is None:
             return 404, {"error": f"nanobot is not running dispatch {dispatch_id}"}
         if run.paused:
@@ -252,6 +264,13 @@ class SnugbanReceiver:
     # ------------------------------------------------------------------
 
     async def _take(self, dispatch: Dispatch) -> None:
+        try:
+            await self._start(dispatch)
+        finally:
+            self._starting.discard(dispatch.dispatch_id)
+            self._paused_while_starting.discard(dispatch.dispatch_id)
+
+    async def _start(self, dispatch: Dispatch) -> None:
         dispatch_id = dispatch.dispatch_id
         if dispatch.github_repo is None:
             await self._client.fail(
@@ -278,7 +297,11 @@ class SnugbanReceiver:
                     await self._stop(other)
             if dispatch_id in self._aborted:  # aborted while the old run was stopping
                 return
-            run = _Run(dispatch, pending=[dispatch_prompt(dispatch, self._workspace)])
+            run = _Run(
+                dispatch,
+                pending=[dispatch_prompt(dispatch, self._workspace)],
+                paused=dispatch_id in self._paused_while_starting,
+            )
             self._remember(run)
             self._start_turns(run)
 
