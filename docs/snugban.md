@@ -56,7 +56,7 @@ Either in `~/.nanobot/config.json`:
 ```json
 {
   "gateway": {
-    "host": "0.0.0.0",
+    "host": "100.x.y.z",
     "port": 18790,
     "snugban": {
       "url": "http://snugban-host.<tailnet>.ts.net:7420",
@@ -77,28 +77,28 @@ or, to keep the key and secret out of the file, leave `gateway.snugban` out and 
 
 A value in `config.json` wins over its environment variable. If only some are set, the gateway prints `✗ Snugban receiver not started: …` naming what is missing and runs without the receiver. With none set, there is no `/snugban` route (it answers 404).
 
-`gateway.host` and `gateway.port` set where the webhook server listens; `nanobot gateway --port` overrides the port. Restart the gateway, which should print:
+`gateway.host` and `gateway.port` set where the webhook server listens; `nanobot gateway --port` overrides the port. Set `host` to nanobot-host's Tailscale IP (`tailscale ip -4`), not `0.0.0.0`: the same server answers the unauthenticated `POST /message` (see [Security](#security)), and binding to the Tailscale address keeps it off every other network. If n8n on the LAN still calls `/message`, it must then use the tailnet address too. Restart the gateway, which should print:
 
 ```
-✓ Snugban: webhooks at http://0.0.0.0:18790/snugban, reporting to http://snugban-host.<tailnet>.ts.net:7420
+✓ Snugban: webhooks at http://100.x.y.z:18790/snugban, reporting to http://snugban-host.<tailnet>.ts.net:7420
 ```
 
 ### 5. Let the agent push
 
-The agent clones `https://github.com/<githubRepo>.git` into `<workspace>/snugban/<project slug>` and pushes the dispatch's branch, so nanobot-host needs git credentials (HTTPS, e.g. `gh auth setup-git`) that can push to Keith's repositories.
+For each dispatch the agent clones `https://github.com/<githubRepo>.git` into a checkout of the dispatch's own, `<workspace>/snugban/<project slug>/<dispatchId>`, which nanobot removes once the dispatch is completed, aborted, replaced or failed by a crash (it is kept while the dispatch waits for an answer). It pushes the dispatch's branch, so nanobot-host needs git credentials (HTTPS, e.g. `gh auth setup-git`) that can push to Keith's repositories.
 
 With the `claude-cli` provider, each model call is one `claude --print` run, limited by `providers.claudeCli.timeout` (300 seconds unless set). A coding task may need more; raise it if runs are cut short.
 
 ## What each webhook does
 
-Every webhook is checked first: the `X-Snugban-Signature` HMAC over `<X-Snugban-Timestamp>.<raw body>` with the webhook secret (constant-time), a timestamp within 5 minutes, and an `X-Snugban-Delivery` id not seen in the last 10 minutes. Anything else gets **401** before the body is parsed. A signed body that is not a webhook nanobot knows (bad JSON, unknown `type`, missing or malformed fields) gets **400**. Bodies over 1 MiB get **413**. Work is done in the background, so answers are immediate.
+Every webhook is checked first: the `X-Snugban-Signature` HMAC over `<X-Snugban-Timestamp>.<raw body>` with the webhook secret (constant-time), a timestamp within 5 minutes, and an `X-Snugban-Delivery` id and a signature not seen in the last 10 minutes (the delivery id is not signed, so a replay under a new id is caught by its signature). Anything else gets **401** before the body is parsed. A signed body that is not a webhook nanobot knows (bad JSON, unknown `type`, missing or malformed fields) gets **400**. Bodies over 1 MiB get **413**. Work is done in the background, so answers are immediate.
 
 | Webhook | What nanobot does |
 | --- | --- |
-| `dispatch` | Acknowledges it over REST (`…/ack`), then runs the agent in the session `snugban:<dispatchId>` with a prompt holding the task, the definition of done, the repository, branch and base branch, Snugban's instructions, and how to report with the `mcp_snugban_*` tools. Task text is fenced off as untrusted data. While a turn runs, nanobot sends `…/heartbeat` itself every `heartbeatEverySeconds` (at most 60). Each `dispatchId` is taken once; one Snugban could not acknowledge is taken again when Snugban resends it. A project with no GitHub repository is failed at once. A new dispatch on a branch nanobot is still working (a revision) stops the old run first. |
+| `dispatch` | Acknowledges it over REST (`…/ack`), then runs the agent in the session `snugban:<dispatchId>` with a prompt holding the task, the definition of done, the repository, branch and base branch, Snugban's instructions, and how to report with the `mcp_snugban_*` tools. Task text is fenced off as untrusted data. While a turn runs, nanobot sends `…/heartbeat` itself every `heartbeatEverySeconds` (at most 60). Each `dispatchId` is taken once; one Snugban could not acknowledge is taken again when Snugban resends it. A project with no GitHub repository is failed at once. A new dispatch on a branch nanobot is still working (a revision) stops the old run first; dispatches on one branch never run together. |
 | `dispatch` with `revision` | The same, with the changes asked for, and told to continue the existing branch. |
 | `decision` | Keith's answer (or that he dismissed the question) becomes the next message in the dispatch of the same `taskId` that nanobot is working on: after the turn in progress, or after a resume. With no such dispatch it goes to the session `snugban:questions`. Each `questionId` is given once. |
-| `pause` | Cancels the turn in progress, killing the processes it started (shell commands, the `claude` CLI and what they started), and stops heartbeats. **404** if nanobot is not working that dispatch, so Snugban does not record a pause that did not happen. |
+| `pause` | Cancels the turn in progress, killing the processes it started (shell commands, the `claude` CLI and what they started), and stops heartbeats. A pause arriving while the dispatch is still being acknowledged holds it until resumed. **404** if nanobot is not working that dispatch, so Snugban does not record a pause that did not happen. |
 | `resume` | Starts the agent again on the interrupted message, told it was paused and to check the checkout and branch for work already done. **404** if nanobot is not working that dispatch. |
 | `abort` | Cancels the turn in progress (killing its processes), its subagents and its heartbeats, and drops any queued answers. The `dispatchId` is remembered, so the dispatch is never run if it is sent again, including when the abort overtakes the acknowledgement. |
 | `status_request` | Sends `…/heartbeat` if nanobot is working the dispatch (or has it paused); otherwise nothing. |
@@ -112,6 +112,8 @@ Beyond the webhooks:
 ## Limits
 
 - **Pause is not "stop at a good point".** nanobot cannot suspend an agent turn, so a pause cancels it wherever it is, and resume starts a new turn. Work the agent had not committed may be lost, and so, most likely, is the interrupted turn's session history; the resumed turn is given the interrupted message again.
+- **A turn that ends without completing or failing leaves the dispatch with Snugban.** nanobot reports progress saying so and stops its heartbeats, but it has already taken that `dispatchId`, so when Snugban's stall handling resends the dispatch nanobot ignores the resend. Snugban then tells Keith after 30 minutes. A decision for the task still continues the run.
+- **A hung turn looks alive.** nanobot sends heartbeats for as long as a turn is running, whether or not the agent is making progress, so Snugban's stall handling does not see a turn stuck on a tool or a model call. Only the provider's own timeouts (`providers.claudeCli.timeout`, `tools.exec.timeout`) end it.
 - **State is in memory.** After a gateway restart nanobot knows no dispatch: pause and resume get 404, and `status_request` sends nothing. Snugban's stall handling then resends the dispatch (same `dispatchId`) after 20 minutes, and nanobot takes it again on the same branch.
 - **Answers to questions asked outside a dispatch** (from a chat channel) go to `snugban:questions`, not to the chat that asked.
 - **Messages the agent sends to its own channel** (`snugban`) have nowhere to go and are logged as `Unknown channel: snugban`.
