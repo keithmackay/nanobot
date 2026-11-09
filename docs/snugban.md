@@ -27,7 +27,7 @@ On Snugban's **Agents** page, register an agent:
 | Max concurrency | `1` |
 | Webhook URL | `http://nanobot-host.<tailnet>.ts.net:18790/snugban` |
 
-The webhook URL cannot be changed after registration. Click **Issue key** and keep both values it shows once: the key (`sb_agent_…`) and the webhook secret.
+If nanobot's address changes later, set the new URL with **Change** on its agent card (or `PATCH /api/agents/<id> {"webhookUrl": "…"}`); the key and webhook secret stay the same. Click **Issue key** and keep both values it shows once: the key (`sb_agent_…`) and the webhook secret.
 
 ### 3. Give the agent Snugban's MCP tools
 
