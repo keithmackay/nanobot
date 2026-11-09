@@ -34,10 +34,15 @@ def _fence(label: str, text: str, nonce: str) -> str:
     return f"<<<BEGIN UNTRUSTED {label} {nonce}\n{text}\nEND UNTRUSTED {nonce}>>>"
 
 
+def checkout_path(dispatch: Dispatch, workspace: Path) -> Path:
+    """The dispatch's own checkout, so dispatches worked at once never share a working tree."""
+    return workspace / "snugban" / dispatch.project_slug / dispatch.dispatch_id
+
+
 def dispatch_prompt(dispatch: Dispatch, workspace: Path) -> str:
     """The agent's first message for a dispatch: the task, where to work and how to report."""
     nonce = secrets.token_hex(8)
-    checkout = workspace / "snugban" / dispatch.project_slug
+    checkout = checkout_path(dispatch, workspace)
     base = dispatch.default_branch or "the repository's default branch"
     d = dispatch.dispatch_id
     sections = [
@@ -51,8 +56,10 @@ def dispatch_prompt(dispatch: Dispatch, workspace: Path) -> str:
         "",
         "Rules:",
         f"- Work in the repository {dispatch.github_repo} "
-        f"(https://github.com/{dispatch.github_repo}.git), in the checkout at {checkout}. "
-        "Clone it there if it is missing; otherwise fetch.",
+        f"(https://github.com/{dispatch.github_repo}.git), in the checkout at {checkout}, "
+        "which belongs to this dispatch alone: clone the repository there if it is missing, "
+        "otherwise fetch. Do not work in, or switch branches in, any other checkout. nanobot "
+        "removes this checkout once the dispatch is over.",
         f"- Work on branch {dispatch.branch}. If it exists on the remote, continue it; otherwise "
         f"create it from {base}.",
         f"- Push only {dispatch.branch}. Never push to {base} or any other branch, and never "

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import shutil
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -25,7 +26,13 @@ from typing import Any, Protocol
 from loguru import logger
 
 from nanobot.snugban.client import SnugbanClient
-from nanobot.snugban.prompts import Dispatch, decision_prompt, dispatch_prompt, resume_prompt
+from nanobot.snugban.prompts import (
+    Dispatch,
+    checkout_path,
+    decision_prompt,
+    dispatch_prompt,
+    resume_prompt,
+)
 from nanobot.snugban.verification import (
     DELIVERY_HEADER,
     TOLERANCE_SECONDS,
@@ -294,6 +301,7 @@ class SnugbanReceiver:
             logger.exception("Snugban: the agent's turn on dispatch {} failed", dispatch_id)
             run.ended = True
             await _cancel(run.heartbeat)
+            await self._remove_checkout(run)
             await self._client.fail(
                 dispatch_id, f"nanobot's agent run stopped with an error ({type(exc).__name__})."
             )
@@ -304,7 +312,9 @@ class SnugbanReceiver:
         dispatch_id = run.dispatch.dispatch_id
         reply = await self._client.heartbeat(dispatch_id)
         if reply.ended or reply.state == "waiting_input":
+            # Completed (its work is pushed) or over: the checkout is no longer needed.
             run.ended = reply.ended
+            await self._remove_checkout(run)
             return
         if reply.delivered:
             await self._client.progress(
@@ -335,6 +345,11 @@ class SnugbanReceiver:
             await self._agent.subagents.cancel_by_session(run.session_key)
         except Exception:
             logger.exception("Snugban: could not cancel subagents of {}", run.session_key)
+        await self._remove_checkout(run)
+
+    async def _remove_checkout(self, run: _Run) -> None:
+        path = checkout_path(run.dispatch, self._workspace)
+        await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
 
     def _live_run(self, dispatch_id: str) -> _Run | None:
         run = self._runs.get(dispatch_id)

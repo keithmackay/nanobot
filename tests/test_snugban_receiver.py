@@ -374,6 +374,67 @@ async def test_the_dispatch_prompt_carries_the_task_and_how_to_report(setup, tmp
 
 
 @pytest.mark.asyncio
+async def test_each_dispatch_has_a_checkout_of_its_own(setup, tmp_path):
+    receiver, agent, _ = setup
+    first = await start_dispatch(receiver, agent)
+    other = dispatch_payload("01KJOTHERTASK000000000000", branch="snugban/other-task")
+    second = await start_dispatch(receiver, agent, other)
+
+    assert str(tmp_path / "snugban" / "demo-app" / DISPATCH) in first.content
+    assert str(tmp_path / "snugban" / "demo-app" / "01KJOTHERTASK000000000000") in second.content
+    assert not first.cancelled
+
+
+def _checkout(tmp_path: Path, dispatch_id: str = DISPATCH) -> Path:
+    """Makes the dispatch's checkout, as the agent would by cloning."""
+    path = tmp_path / "snugban" / "demo-app" / dispatch_id
+    (path / ".git").mkdir(parents=True)
+    (path / "README.md").write_text("work")
+    return path
+
+
+@pytest.mark.asyncio
+async def test_the_checkout_is_removed_when_the_dispatch_is_aborted(setup, tmp_path):
+    receiver, agent, _ = setup
+    await start_dispatch(receiver, agent)
+    checkout = _checkout(tmp_path)
+    await receiver.handle(*signed({"type": "abort", "dispatchId": DISPATCH}))
+    await until(lambda: not checkout.exists())
+    assert (tmp_path / "snugban" / "demo-app").exists()
+
+
+@pytest.mark.asyncio
+async def test_the_checkout_is_removed_once_the_dispatch_is_completed(setup, tmp_path):
+    receiver, agent, snugban = setup
+    turn = await start_dispatch(receiver, agent)
+    checkout = _checkout(tmp_path)
+    snugban.state = "waiting_input"
+    turn.end()
+    await until(lambda: not checkout.exists())
+
+
+@pytest.mark.asyncio
+async def test_the_checkout_is_removed_when_a_turn_crashes(setup, tmp_path):
+    receiver, agent, snugban = setup
+    turn = await start_dispatch(receiver, agent)
+    checkout = _checkout(tmp_path)
+    turn.end(RuntimeError("boom"))
+    await until(lambda: not checkout.exists())
+
+
+@pytest.mark.asyncio
+async def test_the_checkout_is_kept_while_the_dispatch_waits_for_an_answer(setup, tmp_path):
+    receiver, agent, snugban = setup
+    turn = await start_dispatch(receiver, agent)
+    checkout = _checkout(tmp_path)
+    snugban.state = "running"
+    turn.end()
+    await until(lambda: snugban.reports("progress"))
+    await asyncio.sleep(0.05)
+    assert checkout.exists()
+
+
+@pytest.mark.asyncio
 async def test_task_text_is_fenced_off_as_untrusted_data_it_cannot_escape(setup):
     receiver, agent, _ = setup
     payload = dispatch_payload()
