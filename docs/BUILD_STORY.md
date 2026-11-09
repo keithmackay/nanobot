@@ -221,6 +221,17 @@ Root cause was a 24-hour outage on 2026-03-12 where `claude` was silently broken
 
 ---
 
+### Phase 10 — Snugban Receiver (2026-11-08)
+
+nanobot takes coding dispatches from Snugban, Keith's coding coordinator, over Tailscale. Setup and behaviour: [snugban.md](snugban.md).
+
+- `POST /snugban` on the gateway's webhook server verifies each webhook (HMAC-SHA256 over `<timestamp>.<raw body>`, 5-minute window, replayed delivery ids refused) before reading it.
+- A dispatch is acknowledged over REST and run as agent turns in the session `snugban:<dispatchId>`; nanobot sends the dispatch heartbeats itself and the agent reports through the `mcp_snugban_*` tools. Keith's answers continue the dispatch that asked; pause, resume and abort control the run.
+- Config: `gateway.snugban` (`url`, `agentKey`, `webhookSecret`) or `SNUGBAN_URL`, `SNUGBAN_AGENT_KEY`, `SNUGBAN_WEBHOOK_SECRET`. The webhook server now honours `gateway.host` and `gateway.port`.
+- Cancelling an agent turn (`/stop`, or a Snugban pause or abort) now kills what it started: the exec tool's command with its children, and the `claude` CLI process. Before, both ran on after the turn was cancelled.
+
+---
+
 ## Current Configuration
 
 ### Channel Map
@@ -248,7 +259,7 @@ LaunchAgent (com.nanobot.gateway)
 └── nanobot gateway (Python/uv, port 18790)
     ├── Telegram channel (long polling)
     ├── Discord channel (WebSocket gateway)
-    ├── HTTP webhook server (/health, /message)
+    ├── HTTP webhook server (/health, /message, /snugban)
     ├── Task orchestrator (SQLite, polls every 5s)
     ├── Health service (writes health.json every 60s)
     ├── Model router (haiku classifier → tier select)

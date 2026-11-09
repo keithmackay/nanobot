@@ -863,6 +863,8 @@ Use `toolTimeout` to override the default 30s per-call timeout for slow servers:
 
 MCP tools are automatically discovered and registered on startup. The LLM can use them alongside built-in tools — no extra configuration needed.
 
+To take coding work from Snugban (signed webhooks at `POST /snugban`), see [docs/snugban.md](docs/snugban.md).
+
 
 
 
