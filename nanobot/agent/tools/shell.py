@@ -3,10 +3,22 @@
 import asyncio
 import os
 import re
+import signal
 from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
+
+
+def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    """Kill a command started in its own session, with every process it started."""
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 class ExecTool(Tool):
@@ -74,12 +86,14 @@ class ExecTool(Tool):
             env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
 
         try:
+            # Its own process group, so the command's children can be stopped with it.
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
+                start_new_session=True,
             )
             
             try:
@@ -87,8 +101,11 @@ class ExecTool(Tool):
                     process.communicate(),
                     timeout=self.timeout
                 )
+            except asyncio.CancelledError:
+                _kill_process_group(process)
+                raise
             except asyncio.TimeoutError:
-                process.kill()
+                _kill_process_group(process)
                 # Wait for the process to fully terminate so pipes are
                 # drained and file descriptors are released.
                 try:
