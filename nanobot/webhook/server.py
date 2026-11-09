@@ -4,6 +4,8 @@ Endpoints
 ---------
 GET  /health   → health snapshot JSON (same data as health.json)
 POST /message  → inject a message into the agent, returns response JSON
+POST /snugban  → Snugban's signed webhooks (only when the Snugban receiver is
+                 configured; see nanobot/snugban/receiver.py)
 
 POST /message body (JSON):
   {
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -29,6 +32,11 @@ from loguru import logger
 if TYPE_CHECKING:
     from nanobot.agent.loop import AgentLoop
     from nanobot.health.service import HealthService
+    from nanobot.snugban.receiver import SnugbanReceiver
+
+SNUGBAN_PATH = "/snugban"
+# Snugban's own limit on a request body.
+SNUGBAN_MAX_BODY = 1024 * 1024
 
 
 def _json_response(status: str, data: dict) -> bytes:
@@ -52,17 +60,21 @@ class WebhookServer:
         health_service: "HealthService",
         host: str = "0.0.0.0",
         port: int = 18790,
+        snugban: "SnugbanReceiver | None" = None,
     ):
         self.agent = agent
         self.health_service = health_service
         self.host = host
         self.port = port
+        self.snugban = snugban
         self._server: asyncio.Server | None = None
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
             self._handle_client, self.host, self.port
         )
+        # The port actually bound (differs from the one asked for when that was 0).
+        self.port = self._server.sockets[0].getsockname()[1]
         logger.info("WebhookServer: listening on {}:{}", self.host, self.port)
 
     async def stop(self) -> None:
@@ -103,12 +115,16 @@ class WebhookServer:
 
             body = b""
             content_length = int(headers.get("content-length", "0"))
+            if path == SNUGBAN_PATH and content_length > SNUGBAN_MAX_BODY:
+                writer.write(_json_response("413 Payload Too Large", {"error": "body too large"}))
+                await writer.drain()
+                return
             if content_length > 0:
                 body = await asyncio.wait_for(
                     reader.readexactly(content_length), timeout=30.0
                 )
 
-            response = await self._route(method, path, body)
+            response = await self._route(method, path, headers, body)
             writer.write(response)
             await writer.drain()
 
@@ -127,7 +143,9 @@ class WebhookServer:
             except Exception:
                 pass
 
-    async def _route(self, method: str, path: str, body: bytes) -> bytes:
+    async def _route(
+        self, method: str, path: str, headers: dict[str, str], body: bytes
+    ) -> bytes:
         if path == "/health":
             if method != "GET":
                 return _json_response("405 Method Not Allowed", {"error": "use GET"})
@@ -137,6 +155,12 @@ class WebhookServer:
             if method != "POST":
                 return _json_response("405 Method Not Allowed", {"error": "use POST"})
             return await self._handle_message(body)
+
+        if path == SNUGBAN_PATH and self.snugban is not None:
+            if method != "POST":
+                return _json_response("405 Method Not Allowed", {"error": "use POST"})
+            status, data = await self.snugban.handle(headers, body)
+            return _json_response(f"{status} {HTTPStatus(status).phrase}", data)
 
         return _json_response("404 Not Found", {"error": f"unknown path: {path}"})
 
