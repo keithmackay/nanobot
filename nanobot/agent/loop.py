@@ -584,7 +584,7 @@ class AgentLoop:
 
         # Slash commands
         cmd = msg.content.strip().lower()
-        if cmd == "/new":
+        if cmd in ("/new", "/reset", "/clear"):
             lock = self._consolidation_locks.setdefault(session.key, asyncio.Lock())
             self._consolidating.add(session.key)
             try:
@@ -616,7 +616,7 @@ class AgentLoop:
                                   content="New session started.")
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
-                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/stop — Stop the current task\n/routing-stats — Model routing stats\n/help — Show available commands")
+                                  content="🐈 nanobot commands:\n/new — Start a new conversation\n/reset — Alias for /new\n/clear — Alias for /new\n/stop — Stop the current task\n/routing-stats — Model routing stats\n/help — Show available commands")
 
         if cmd == "/routing-stats":
             if self.model_router is not None and self.model_router.metrics is not None:
