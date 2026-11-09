@@ -91,7 +91,7 @@ With the `claude-cli` provider, each model call is one `claude --print` run, lim
 
 ## What each webhook does
 
-Every webhook is checked first: the `X-Snugban-Signature` HMAC over `<X-Snugban-Timestamp>.<raw body>` with the webhook secret (constant-time), a timestamp within 5 minutes, and an `X-Snugban-Delivery` id and a signature not seen in the last 10 minutes (the delivery id is not signed, so a replay under a new id is caught by its signature). Anything else gets **401** before the body is parsed. A signed body that is not a webhook nanobot knows (bad JSON, unknown `type`, missing or malformed fields) gets **400**. Bodies over 1 MiB get **413**. Work is done in the background, so answers are immediate.
+Every webhook is checked first: the `X-Snugban-Signature` HMAC over `<X-Snugban-Timestamp>.<raw body>` with the webhook secret (constant-time), a timestamp within 5 minutes, and a signature not seen in the last 10 minutes; these fail with **401** before the body is parsed. Then the body's signed `deliveryId` must equal the `X-Snugban-Delivery` header and must not have been seen in the last 10 minutes, or the answer is **401**. A signed body that is not a webhook nanobot knows (bad JSON, unknown `type`, missing or malformed fields) gets **400**. Bodies over 1 MiB get **413**. Work is done in the background, so answers are immediate.
 
 | Webhook | What nanobot does |
 | --- | --- |

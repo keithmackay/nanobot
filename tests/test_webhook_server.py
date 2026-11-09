@@ -91,7 +91,9 @@ async def test_answers_with_the_receivers_verdict_on_a_real_webhook(tmp_path: Pa
     )
     server = await _started(receiver)
     try:
-        body = json.dumps({"type": "status_request", "dispatchId": "01X"}).encode()
+        body = json.dumps(
+            {"type": "status_request", "dispatchId": "01X", "deliveryId": "01DELIVERY"}
+        ).encode()
         timestamp = str(int(time.time()))
         digest = hmac.new(SECRET.encode(), timestamp.encode() + b"." + body, hashlib.sha256)
         async with httpx.AsyncClient() as http:

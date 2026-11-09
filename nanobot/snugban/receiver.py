@@ -138,20 +138,29 @@ class SnugbanReceiver:
             logger.warning("Snugban: refused a webhook with a missing or invalid signature")
             return 401, {"error": "invalid signature"}
         lower = {name.lower(): value for name, value in headers.items()}
-        delivery = lower.get(DELIVERY_HEADER, "")
-        if not delivery or not self._deliveries.add(delivery, now=now):
-            logger.warning("Snugban: refused a webhook with a missing or replayed delivery id")
-            return 401, {"error": "missing or replayed delivery id"}
-        # The delivery id is not signed, so a replay could carry a new one; the signature
-        # (over the timestamp and body) cannot change without the secret.
+        # A webhook already seen in the replay window, by its signature (over the timestamp
+        # and body, which cannot change without the secret).
         if not self._signatures.add(lower.get(SIGNATURE_HEADER, ""), now=now):
             logger.warning("Snugban: refused a replayed webhook (signature already seen)")
             return 401, {"error": "replayed webhook"}
-
         try:
             payload = json.loads(body)
-            if not isinstance(payload, dict):
-                raise _InvalidWebhookError("the body is not a JSON object")
+        except ValueError:
+            logger.warning("Snugban: refused a signed webhook whose body is not JSON")
+            return 400, {"error": "the body is not JSON"}
+        if not isinstance(payload, dict):
+            return 400, {"error": "the body is not a JSON object"}
+        # The body's deliveryId is signed; the X-Snugban-Delivery header, which must match
+        # it, is not. Replays are refused by the signed value.
+        delivery = payload.get("deliveryId")
+        if not isinstance(delivery, str) or not delivery or delivery != lower.get(DELIVERY_HEADER):
+            logger.warning("Snugban: refused a webhook whose delivery id is missing or differs")
+            return 401, {"error": "missing or mismatched delivery id"}
+        if not self._deliveries.add(delivery, now=now):
+            logger.warning("Snugban: refused a webhook with a replayed delivery id")
+            return 401, {"error": "replayed delivery id"}
+
+        try:
             kind = payload.get("type")
             if kind == "dispatch":
                 return self._on_dispatch(_parse_dispatch(payload), now)

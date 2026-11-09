@@ -119,14 +119,25 @@ _sends = iter(range(1_000_000))
 
 
 def signed(payload: dict, *, delivery: str | None = None, secret: str = SECRET):
-    body = json.dumps(payload).encode()
+    """A webhook as Snugban sends it: the delivery id in the header and, signed, in the body."""
+    delivery = delivery or f"01DELIVERY{next(_deliveries):016d}"
+    body = json.dumps({**payload, "deliveryId": delivery}).encode()
     timestamp = str(NOW - next(_sends) % 250)
     headers = {
         "x-snugban-timestamp": timestamp,
         "x-snugban-signature": sign(body, timestamp=timestamp, secret=secret),
-        "x-snugban-delivery": delivery or f"01DELIVERY{next(_deliveries):016d}",
+        "x-snugban-delivery": delivery,
     }
     return headers, body
+
+
+def signed_raw(body: bytes, delivery: str) -> dict[str, str]:
+    """Headers signing *body* exactly as given."""
+    return {
+        "x-snugban-timestamp": str(NOW),
+        "x-snugban-signature": sign(body),
+        "x-snugban-delivery": delivery,
+    }
 
 
 def dispatch_payload(dispatch_id: str = DISPATCH, **overrides) -> dict:
@@ -312,17 +323,45 @@ async def test_never_logs_the_secret_or_the_key(setup):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
-    [b"not json", b"[1, 2]", b'{"dispatchId": "01X"}', b'{"type": "teleport", "dispatchId": "01X"}'],
+    [
+        b"not json",
+        b"[1, 2]",
+        b'{"dispatchId": "01X", "deliveryId": "01BAD"}',
+        b'{"type": "teleport", "dispatchId": "01X", "deliveryId": "01BAD"}',
+    ],
 )
 async def test_refuses_a_signed_body_that_is_not_a_known_webhook(setup, body):
     receiver, _, _ = setup
-    headers = {
-        "x-snugban-timestamp": str(NOW),
-        "x-snugban-signature": sign(body),
-        "x-snugban-delivery": f"01BAD{abs(hash(body))}",
-    }
-    status, _ = await receiver.handle(headers, body)
+    status, _ = await receiver.handle(signed_raw(body, "01BAD"), body)
     assert status == 400
+
+
+@pytest.mark.asyncio
+async def test_refuses_a_body_whose_delivery_id_differs_from_the_header(setup):
+    receiver, agent, _ = setup
+    body = json.dumps({**dispatch_payload(), "deliveryId": "01SIGNEDDELIVERY"}).encode()
+    status, _ = await receiver.handle(signed_raw(body, "01OTHERDELIVERY"), body)
+    assert status == 401
+    await asyncio.sleep(0.05)
+    assert agent.turns == []
+
+
+@pytest.mark.asyncio
+async def test_refuses_a_body_without_a_delivery_id(setup):
+    receiver, agent, _ = setup
+    body = json.dumps(dispatch_payload()).encode()
+    status, _ = await receiver.handle(signed_raw(body, "01HEADERONLY"), body)
+    assert status == 401
+
+
+@pytest.mark.asyncio
+async def test_a_signed_delivery_id_is_acted_on_once_whatever_the_header_says(setup):
+    receiver, agent, _ = setup
+    body = json.dumps({"type": "status_request", "dispatchId": DISPATCH,
+                       "deliveryId": "01ONCE"}).encode()
+    assert (await receiver.handle(signed_raw(body, "01ONCE"), body))[0] == 200
+    status, _ = await receiver.handle(signed_raw(body, "01ONCE"), body)
+    assert status == 401
 
 
 @pytest.mark.asyncio
