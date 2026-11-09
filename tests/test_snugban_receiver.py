@@ -45,6 +45,21 @@ class Turn:
         self.finish.set()
 
 
+class FakeSession:
+    def __init__(self):
+        self.messages: list[dict] = []
+
+
+class FakeSessions:
+    """nanobot's SessionManager: each session's saved messages, tool results included."""
+
+    def __init__(self):
+        self.by_key: dict[str, FakeSession] = {}
+
+    def get_or_create(self, key: str) -> FakeSession:
+        return self.by_key.setdefault(key, FakeSession())
+
+
 class FakeAgent:
     """Runs turns that last until the test ends them, as nanobot's AgentLoop.process_direct does."""
 
@@ -52,6 +67,14 @@ class FakeAgent:
         self.turns: list[Turn] = []
         self.cancelled_sessions: list[str] = []
         self.subagents = self
+        self.sessions = FakeSessions()
+
+    def asked_keith(self, session_key: str, question_id: str) -> None:
+        """Records, as the agent loop does, a call of the ask_keith tool and its result."""
+        self.sessions.get_or_create(session_key).messages.append({
+            "role": "tool", "tool_call_id": "call_1", "name": "mcp_snugban_ask_keith",
+            "content": json.dumps({"questionId": question_id}),
+        })
 
     async def process_direct(self, content, session_key, channel, chat_id, **_kwargs) -> str:
         turn = Turn(content, session_key, channel, chat_id)
@@ -650,6 +673,102 @@ async def test_a_turn_that_ends_without_completing_is_reported(setup):
     await until(lambda: snugban.reports("progress"))
     assert "without completing" in snugban.reports("progress")[0]["message"]
     assert snugban.reports("fail") == []
+
+
+def _fast_heartbeats(agent, snugban, tmp_path) -> SnugbanReceiver:
+    return SnugbanReceiver(
+        secret=SECRET,
+        client=SnugbanClient("http://x", KEY, http=httpx.AsyncClient(
+            transport=httpx.MockTransport(snugban))),
+        agent=agent,
+        workspace=tmp_path,
+        clock=lambda: float(NOW),
+        heartbeat_every_s=0.02,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_dispatch_waiting_for_keiths_answer_stays_alive_and_heartbeating(setup, tmp_path):
+    _, agent, snugban = setup
+    receiver = _fast_heartbeats(agent, snugban, tmp_path)
+    turn = await start_dispatch(receiver, agent)
+    agent.asked_keith(turn.session_key, "01QWAITING")
+    snugban.state = "running"
+    turn.end()
+
+    await until(lambda: snugban.reports("progress"))
+    message = snugban.reports("progress")[0]["message"]
+    assert "01QWAITING" in message and "waiting" in message.lower()
+    sent = len(snugban.reports("heartbeat"))
+    await asyncio.sleep(0.15)
+    assert len(snugban.reports("heartbeat")) >= sent + 3
+    assert snugban.reports("fail") == []
+
+    status, _ = await receiver.handle(*signed({"type": "status_request", "dispatchId": DISPATCH}))
+    assert status == 202
+    await receiver.close()
+
+
+@pytest.mark.asyncio
+async def test_the_answer_ends_the_wait_and_continues_the_dispatch(setup, tmp_path):
+    _, agent, snugban = setup
+    receiver = _fast_heartbeats(agent, snugban, tmp_path)
+    turn = await start_dispatch(receiver, agent)
+    agent.asked_keith(turn.session_key, "01QWAITING")
+    snugban.state = "running"
+    turn.end()
+    await until(lambda: snugban.reports("progress"))
+
+    await receiver.handle(*signed({"type": "decision", "questionId": "01QWAITING",
+                                   "taskId": TASK, "answer": "Port 8080"}))
+    await until(lambda: len(agent.turns) == 2)
+    answer = agent.turns[1]
+    assert "Port 8080" in answer.content
+    snugban.state = "running"
+    answer.end()
+    await until(lambda: len(snugban.reports("progress")) == 2)
+    assert "without completing" in snugban.reports("progress")[1]["message"]
+    await asyncio.sleep(0.05)
+    sent = len(snugban.reports("heartbeat"))
+    await asyncio.sleep(0.1)
+    assert len(snugban.reports("heartbeat")) == sent
+    await receiver.close()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_ends_without_asking_stops_heartbeating(setup, tmp_path):
+    _, agent, snugban = setup
+    receiver = _fast_heartbeats(agent, snugban, tmp_path)
+    turn = await start_dispatch(receiver, agent)
+    snugban.state = "running"
+    turn.end()
+    await until(lambda: snugban.reports("progress"))
+    await asyncio.sleep(0.05)
+    sent = len(snugban.reports("heartbeat"))
+    await asyncio.sleep(0.1)
+    assert len(snugban.reports("heartbeat")) == sent
+    status, _ = await receiver.handle(*signed({"type": "status_request", "dispatchId": DISPATCH}))
+    assert status == 200
+    await receiver.close()
+
+
+@pytest.mark.asyncio
+async def test_a_dispatch_waiting_for_an_answer_heartbeats_again_after_pause_and_resume(
+    setup, tmp_path
+):
+    _, agent, snugban = setup
+    receiver = _fast_heartbeats(agent, snugban, tmp_path)
+    turn = await start_dispatch(receiver, agent)
+    agent.asked_keith(turn.session_key, "01QWAITING")
+    snugban.state = "running"
+    turn.end()
+    await until(lambda: snugban.reports("progress"))
+    await receiver.handle(*signed({"type": "pause", "dispatchId": DISPATCH}))
+    await receiver.handle(*signed({"type": "resume", "dispatchId": DISPATCH}))
+    sent = len(snugban.reports("heartbeat"))
+    await asyncio.sleep(0.15)
+    assert len(snugban.reports("heartbeat")) >= sent + 3
+    await receiver.close()
 
 
 @pytest.mark.asyncio

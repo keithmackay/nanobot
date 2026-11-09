@@ -42,6 +42,8 @@ from nanobot.snugban.verification import (
 )
 
 CHANNEL = "snugban"
+# The Snugban MCP tool the agent asks Keith with; its result holds {"questionId": …}.
+ASK_TOOL = "mcp_snugban_ask_keith"
 QUESTIONS_SESSION = "snugban:questions"
 
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
@@ -81,6 +83,7 @@ class _Run:
     paused: bool = False
     interrupted: bool = False  # a pause cancelled a turn part-way
     ended: bool = False
+    waiting_for: list[str] = field(default_factory=list)  # Keith's unanswered questions
 
     @property
     def session_key(self) -> str:
@@ -248,6 +251,8 @@ class SnugbanReceiver:
                 run.pending[0] = resume_prompt(run.pending[0])
             run.interrupted = False
             self._start_turns(run)
+            if not run.working and run.waiting_for:
+                run.heartbeat = self._in_background(self._beat(run))
         return 200, {"status": "running"}
 
     async def _on_abort(self, dispatch_id: str, now: float) -> Answer:
@@ -263,7 +268,7 @@ class SnugbanReceiver:
 
     async def _on_status_request(self, dispatch_id: str, now: float) -> Answer:
         run = self._live_run(dispatch_id)
-        if run is None or not (run.working or run.paused):
+        if run is None or not (run.working or run.paused or run.waiting_for):
             return 200, {"status": "not working"}
         self._in_background(self._client.heartbeat(dispatch_id))
         return 202, {"status": "working"}
@@ -317,6 +322,9 @@ class SnugbanReceiver:
     def _start_turns(self, run: _Run) -> None:
         if run.ended or run.paused or run.working or not run.pending:
             return
+        run.waiting_for = []
+        if run.heartbeat is not None:
+            run.heartbeat.cancel()  # the heartbeat kept while waiting for an answer
         run.worker = self._in_background(self._work(run))
         run.heartbeat = self._in_background(self._beat(run))
 
@@ -332,7 +340,9 @@ class SnugbanReceiver:
                 if not run.pending:
                     await _cancel(run.heartbeat)
                     await self._check_reported(run)
-                    if run.pending and not run.ended:  # an answer arrived meanwhile
+                    if not run.ended and (run.pending or run.waiting_for):
+                        # More to do (an answer arrived meanwhile), or waiting for Keith:
+                        # either way the dispatch is alive, so keep it heartbeating.
                         run.heartbeat = self._in_background(self._beat(run))
         except asyncio.CancelledError:
             raise
@@ -355,12 +365,38 @@ class SnugbanReceiver:
             run.ended = reply.ended
             await self._remove_checkout(run)
             return
-        if reply.delivered:
+        if not reply.delivered:
+            return
+        run.waiting_for = self._unanswered_questions(run)
+        if run.waiting_for:
             await self._client.progress(
                 dispatch_id,
-                "nanobot's agent finished its turn without completing or failing the dispatch. "
-                "It may be waiting for Keith's answer to a question; otherwise it has stopped.",
+                "nanobot is waiting for Keith's answer to question "
+                f"{', '.join(run.waiting_for)}, and keeps the dispatch alive meanwhile.",
             )
+        else:
+            await self._client.progress(
+                dispatch_id,
+                "nanobot's agent finished its turn without completing or failing the dispatch, "
+                "and asked Keith nothing it is waiting on; it has stopped.",
+            )
+
+    def _unanswered_questions(self, run: _Run) -> list[str]:
+        """Questions the run asked Keith (ask_keith results in its session) not yet answered."""
+        sessions = getattr(self._agent, "sessions", None)
+        if sessions is None:
+            return []
+        asked: list[str] = []
+        for message in sessions.get_or_create(run.session_key).messages:
+            if message.get("role") != "tool" or message.get("name") != ASK_TOOL:
+                continue
+            try:
+                question_id = json.loads(message.get("content") or "").get("questionId")
+            except (ValueError, AttributeError):
+                continue
+            if isinstance(question_id, str) and question_id not in self._questions:
+                asked.append(question_id)
+        return asked
 
     async def _beat(self, run: _Run) -> None:
         dispatch_id = run.dispatch.dispatch_id

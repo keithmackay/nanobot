@@ -101,18 +101,21 @@ Every webhook is checked first: the `X-Snugban-Signature` HMAC over `<X-Snugban-
 | `pause` | Cancels the turn in progress, killing the processes it started (shell commands, the `claude` CLI and what they started), and stops heartbeats. A pause arriving while the dispatch is still being acknowledged holds it until resumed. **404** if nanobot is not working that dispatch, so Snugban does not record a pause that did not happen. |
 | `resume` | Starts the agent again on the interrupted message, told it was paused and to check the checkout and branch for work already done. **404** if nanobot is not working that dispatch. |
 | `abort` | Cancels the turn in progress (killing its processes), its subagents and its heartbeats, and drops any queued answers. The `dispatchId` is remembered, so the dispatch is never run if it is sent again, including when the abort overtakes the acknowledgement. |
-| `status_request` | Sends `…/heartbeat` if nanobot is working the dispatch (or has it paused); otherwise nothing. |
+| `status_request` | Sends `…/heartbeat` if nanobot is working the dispatch, has it paused, or is waiting for Keith's answer on it; otherwise nothing. |
 
 Beyond the webhooks:
 
 - A heartbeat answered with 404 or 409 means Snugban has ended the dispatch, so nanobot stops the run as for an abort. That covers an abort webhook that never arrived.
-- When the agent's turns end, nanobot sends one more heartbeat to see where the dispatch stands. If it was neither completed nor failed, nanobot reports progress saying so (the agent may be waiting for Keith's answer) and stops sending heartbeats, so Snugban's stall handling takes over.
+- When the agent's turns end, nanobot sends one more heartbeat to see where the dispatch stands. If it was neither completed nor failed:
+  - If the agent asked Keith a question (`mcp_snugban_ask_keith`, whose result is saved in the dispatch's session) that has not been answered, nanobot reports that it is waiting for that answer and **keeps heartbeating**, so the dispatch stays alive and Snugban's stall handling does not fire. `status_request` is answered with a heartbeat too. The answer continues the dispatch.
+  - Otherwise nanobot reports that the agent stopped without completing, and stops heartbeating, so Snugban's stall handling takes over.
 - If a turn raises an error, nanobot fails the dispatch, giving only the error's type.
 
 ## Limits
 
 - **Pause is not "stop at a good point".** nanobot cannot suspend an agent turn, so a pause cancels it wherever it is, and resume starts a new turn. Work the agent had not committed may be lost, and so, most likely, is the interrupted turn's session history; the resumed turn is given the interrupted message again.
-- **A turn that ends without completing or failing leaves the dispatch with Snugban.** nanobot reports progress saying so and stops its heartbeats, but it has already taken that `dispatchId`, so when Snugban's stall handling resends the dispatch nanobot ignores the resend. Snugban then tells Keith after 30 minutes. A decision for the task still continues the run.
+- **A turn that ends without completing, failing or asking Keith leaves the dispatch with Snugban.** nanobot reports progress saying so and stops its heartbeats, but it has already taken that `dispatchId`, so when Snugban's stall handling resends the dispatch nanobot ignores the resend. Snugban then tells Keith after 30 minutes. A decision for the task still continues the run.
+- **A dispatch waiting for Keith waits as long as he does.** It heartbeats until his answer (or dismissal) arrives; abort it in Snugban if it is no longer wanted.
 - **A hung turn looks alive.** nanobot sends heartbeats for as long as a turn is running, whether or not the agent is making progress, so Snugban's stall handling does not see a turn stuck on a tool or a model call. Only the provider's own timeouts (`providers.claudeCli.timeout`, `tools.exec.timeout`) end it.
 - **State is in memory.** After a gateway restart nanobot knows no dispatch: pause and resume get 404, and `status_request` sends nothing. Snugban's stall handling then resends the dispatch (same `dispatchId`) after 20 minutes, and nanobot takes it again on the same branch.
 - **Answers to questions asked outside a dispatch** (from a chat channel) go to `snugban:questions`, not to the chat that asked.
