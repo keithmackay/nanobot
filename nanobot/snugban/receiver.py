@@ -35,6 +35,7 @@ from nanobot.snugban.prompts import (
 )
 from nanobot.snugban.verification import (
     DELIVERY_HEADER,
+    SIGNATURE_HEADER,
     TOLERANCE_SECONDS,
     SeenIds,
     verify_signature,
@@ -114,6 +115,7 @@ class SnugbanReceiver:
         # Delivery ids are kept for twice the timestamp tolerance, which covers a webhook
         # stamped up to five minutes in the future.
         self._deliveries = SeenIds(max_entries=10_000, ttl_s=2 * TOLERANCE_SECONDS)
+        self._signatures = SeenIds(max_entries=10_000, ttl_s=2 * TOLERANCE_SECONDS)
         self._dispatches = SeenIds(max_entries=1_000)
         self._questions = SeenIds(max_entries=1_000)
         self._aborted = SeenIds(max_entries=1_000)
@@ -136,6 +138,11 @@ class SnugbanReceiver:
         if not delivery or not self._deliveries.add(delivery, now=now):
             logger.warning("Snugban: refused a webhook with a missing or replayed delivery id")
             return 401, {"error": "missing or replayed delivery id"}
+        # The delivery id is not signed, so a replay could carry a new one; the signature
+        # (over the timestamp and body) cannot change without the secret.
+        if not self._signatures.add(lower.get(SIGNATURE_HEADER, ""), now=now):
+            logger.warning("Snugban: refused a replayed webhook (signature already seen)")
+            return 401, {"error": "replayed webhook"}
 
         try:
             payload = json.loads(body)

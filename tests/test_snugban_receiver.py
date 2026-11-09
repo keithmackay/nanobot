@@ -109,13 +109,18 @@ def sign(body: bytes, timestamp: str = str(NOW), secret: str = SECRET) -> str:
 
 
 _deliveries = iter(range(1, 1_000_000))
+# Snugban stamps each send when it is made, so a resend of the same body carries another
+# timestamp (and so another signature). Each send here is a second earlier than the last,
+# staying within the five minutes the receiver accepts.
+_sends = iter(range(1_000_000))
 
 
 def signed(payload: dict, *, delivery: str | None = None, secret: str = SECRET):
     body = json.dumps(payload).encode()
+    timestamp = str(NOW - next(_sends) % 250)
     headers = {
-        "x-snugban-timestamp": str(NOW),
-        "x-snugban-signature": sign(body, secret=secret),
+        "x-snugban-timestamp": timestamp,
+        "x-snugban-signature": sign(body, timestamp=timestamp, secret=secret),
         "x-snugban-delivery": delivery or f"01DELIVERY{next(_deliveries):016d}",
     }
     return headers, body
@@ -255,6 +260,23 @@ async def test_refuses_a_replayed_delivery_id(setup):
     assert status == 200
     status, _ = await receiver.handle(*signed(payload, delivery="01SAMEDELIVERY"))
     assert status == 401
+
+
+@pytest.mark.asyncio
+async def test_refuses_a_replayed_webhook_under_a_new_delivery_id(setup):
+    receiver, agent, _ = setup
+    first = await start_dispatch(receiver, agent)
+    pause_headers, pause_body = signed({"type": "pause", "dispatchId": DISPATCH})
+    assert (await receiver.handle(pause_headers, pause_body))[0] == 200
+    assert first.cancelled
+    assert (await receiver.handle(*signed({"type": "resume", "dispatchId": DISPATCH})))[0] == 200
+    await until(lambda: len(agent.turns) == 2)
+
+    replay = dict(pause_headers, **{"x-snugban-delivery": "01ATTACKERSNEWDELIVERYID"})
+    status, _ = await receiver.handle(replay, pause_body)
+
+    assert status == 401
+    assert not agent.turns[1].cancelled
 
 
 @pytest.mark.asyncio
