@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
+import signal
 import subprocess
+import threading
 from typing import Any
 
 from loguru import logger
@@ -36,6 +39,52 @@ _TOOL_INJECTION = (
     "After calling a tool you will receive a Tool result: line — then continue from there.\n"
     "When you have a final answer (not calling a tool), output plain text without any <tool_call> block."
 )
+
+
+class _ClaudeProcess:
+    """One `claude` run in its own process group, which a cancelled turn can kill.
+
+    The run happens on a worker thread, which cancelling the awaiting coroutine
+    does not stop, so the coroutine kills the process (and whatever it started,
+    such as a git push) itself.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._proc: subprocess.Popen | None = None
+        self._killed = False
+
+    def run(self, cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
+        with self._lock:
+            if self._killed:
+                raise RuntimeError("claude run was cancelled before it started")
+            self._proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        try:
+            stdout, stderr = self._proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.kill()
+            self._proc.communicate()
+            raise
+        return subprocess.CompletedProcess(cmd, self._proc.returncode, stdout, stderr)
+
+    def kill(self) -> None:
+        with self._lock:
+            self._killed = True
+            if self._proc is None or self._proc.poll() is not None:
+                return
+            try:
+                if hasattr(os, "killpg"):
+                    os.killpg(self._proc.pid, signal.SIGKILL)
+                else:
+                    self._proc.kill()
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 class ClaudeCliProvider(LLMProvider):
@@ -73,8 +122,12 @@ class ClaudeCliProvider(LLMProvider):
         model_id = self._resolve_model(model or self.default_model)
         prompt = _build_prompt(messages, tools)
 
+        process = _ClaudeProcess()
         try:
-            raw = await asyncio.to_thread(self._run, prompt, model_id)
+            raw = await asyncio.to_thread(self._run, prompt, model_id, process)
+        except asyncio.CancelledError:
+            process.kill()
+            raise
         except FileNotFoundError:
             return LLMResponse(
                 content=(
@@ -90,7 +143,7 @@ class ClaudeCliProvider(LLMProvider):
 
         return _parse_response(raw, tools)
 
-    def _run(self, prompt: str, model_id: str) -> str:
+    def _run(self, prompt: str, model_id: str, process: _ClaudeProcess) -> str:
         cmd = [
             self.claude_bin, "--print", prompt,
             "--output-format", "json",
@@ -99,7 +152,7 @@ class ClaudeCliProvider(LLMProvider):
         ]
         if model_id:
             cmd += ["--model", model_id]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout)
+        result = process.run(cmd, timeout=self.timeout)
         if result.returncode != 0:
             err = result.stderr.strip() or f"claude exited with code {result.returncode}"
             raise RuntimeError(err)

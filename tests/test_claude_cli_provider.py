@@ -195,14 +195,17 @@ def provider():
     return ClaudeCliProvider(default_model="claude-cli/sonnet-4.5")
 
 
-def _make_completed_process(stdout: str, returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+def _fake_popen(stdout: str, returncode: int = 0, stderr: str = "") -> MagicMock:
+    proc = MagicMock()
+    proc.communicate.return_value = (stdout, stderr)
+    proc.returncode = returncode
+    return proc
 
 
 @pytest.mark.asyncio
 async def test_chat_success(provider):
     raw = json.dumps({"type": "result", "result": "Hi there!", "is_error": False})
-    with patch("subprocess.run", return_value=_make_completed_process(raw)):
+    with patch("subprocess.Popen", return_value=_fake_popen(raw)):
         resp = await provider.chat([{"role": "user", "content": "Hello"}])
     assert resp.content == "Hi there!"
     assert resp.finish_reason == "stop"
@@ -211,7 +214,7 @@ async def test_chat_success(provider):
 @pytest.mark.asyncio
 async def test_chat_passes_model_flag(provider):
     raw = json.dumps({"type": "result", "result": "ok", "is_error": False})
-    with patch("subprocess.run", return_value=_make_completed_process(raw)) as mock_run:
+    with patch("subprocess.Popen", return_value=_fake_popen(raw)) as mock_run:
         await provider.chat([{"role": "user", "content": "Hi"}], model="claude-cli/haiku-4.5")
     cmd = mock_run.call_args[0][0]
     assert "--model" in cmd
@@ -220,7 +223,7 @@ async def test_chat_passes_model_flag(provider):
 
 @pytest.mark.asyncio
 async def test_chat_cli_not_found(provider):
-    with patch("subprocess.run", side_effect=FileNotFoundError):
+    with patch("subprocess.Popen", side_effect=FileNotFoundError):
         resp = await provider.chat([{"role": "user", "content": "Hi"}])
     assert resp.finish_reason == "error"
     assert "claude" in resp.content.lower()
@@ -228,7 +231,10 @@ async def test_chat_cli_not_found(provider):
 
 @pytest.mark.asyncio
 async def test_chat_timeout(provider):
-    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=120)):
+    proc = _fake_popen("")
+    proc.communicate.side_effect = [subprocess.TimeoutExpired(cmd="claude", timeout=120), ("", "")]
+    proc.poll.return_value = None
+    with patch("subprocess.Popen", return_value=proc), patch("os.killpg"):
         resp = await provider.chat([{"role": "user", "content": "Hi"}])
     assert resp.finish_reason == "error"
     assert "timed out" in resp.content.lower()
@@ -236,7 +242,7 @@ async def test_chat_timeout(provider):
 
 @pytest.mark.asyncio
 async def test_chat_nonzero_exit(provider):
-    with patch("subprocess.run", return_value=_make_completed_process("", returncode=1, stderr="auth error")):
+    with patch("subprocess.Popen", return_value=_fake_popen("", returncode=1, stderr="auth error")):
         resp = await provider.chat([{"role": "user", "content": "Hi"}])
     assert resp.finish_reason == "error"
     assert "auth error" in resp.content
@@ -250,11 +256,48 @@ async def test_chat_with_tool_call(provider):
         "result": '<tool_call>\n{"name": "web_search", "arguments": {"query": "python"}}\n</tool_call>',
     })
     tools = [{"type": "function", "function": {"name": "web_search", "description": "Search the web"}}]
-    with patch("subprocess.run", return_value=_make_completed_process(raw)):
+    with patch("subprocess.Popen", return_value=_fake_popen(raw)):
         resp = await provider.chat([{"role": "user", "content": "Search python"}], tools=tools)
     assert len(resp.tool_calls) == 1
     assert resp.tool_calls[0].name == "web_search"
     assert resp.tool_calls[0].arguments == {"query": "python"}
+
+
+@pytest.mark.asyncio
+async def test_cancelling_chat_kills_the_claude_process_and_its_children(tmp_path):
+    """A cancelled turn (/stop, a Snugban abort) must not leave claude working on."""
+    import asyncio
+    import os
+
+    pidfile = tmp_path / "child.pid"
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nwait\n")
+    fake_claude.chmod(0o755)
+    provider = ClaudeCliProvider(claude_bin=str(fake_claude), timeout=60)
+
+    turn = asyncio.create_task(provider.chat([{"role": "user", "content": "Hi"}]))
+    for _ in range(100):
+        if pidfile.exists() and pidfile.read_text().strip():
+            break
+        await asyncio.sleep(0.05)
+    child = int(pidfile.read_text().strip())
+
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await turn
+
+    def alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    for _ in range(100):
+        if not alive(child):
+            break
+        await asyncio.sleep(0.05)
+    assert not alive(child), "claude's child process survived cancellation"
 
 
 # ---------------------------------------------------------------------------
