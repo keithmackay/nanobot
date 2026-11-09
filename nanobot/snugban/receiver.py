@@ -111,6 +111,7 @@ class SnugbanReceiver:
         self._questions = SeenIds(max_entries=1_000)
         self._aborted = SeenIds(max_entries=1_000)
         self._runs: dict[str, _Run] = {}
+        self._branch_locks: dict[str, asyncio.Lock] = {}
         self._background: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------------
@@ -253,17 +254,19 @@ class SnugbanReceiver:
             # Forgotten, so that Snugban's resend of it is taken.
             self._dispatches.discard(dispatch_id)
             return
-        # Never two workers on one branch.
-        for other in list(self._runs.values()):
-            if not other.ended and other.dispatch.branch == dispatch.branch:
-                logger.info("Snugban: dispatch {} replaces {} on {}", dispatch_id,
-                            other.dispatch.dispatch_id, dispatch.branch)
-                await self._stop(other)
-        if dispatch_id in self._aborted:  # aborted while the old run was stopping
-            return
-        run = _Run(dispatch, pending=[dispatch_prompt(dispatch, self._workspace)])
-        self._remember(run)
-        self._start_turns(run)
+        # Never two workers on one branch: stopping the old run and starting this one happen
+        # under the branch's lock, so dispatches taken at once replace one another in turn.
+        async with self._branch_locks.setdefault(dispatch.branch, asyncio.Lock()):
+            for other in list(self._runs.values()):
+                if not other.ended and other.dispatch.branch == dispatch.branch:
+                    logger.info("Snugban: dispatch {} replaces {} on {}", dispatch_id,
+                                other.dispatch.dispatch_id, dispatch.branch)
+                    await self._stop(other)
+            if dispatch_id in self._aborted:  # aborted while the old run was stopping
+                return
+            run = _Run(dispatch, pending=[dispatch_prompt(dispatch, self._workspace)])
+            self._remember(run)
+            self._start_turns(run)
 
     def _start_turns(self, run: _Run) -> None:
         if run.ended or run.paused or run.working or not run.pending:

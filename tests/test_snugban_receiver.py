@@ -536,6 +536,22 @@ async def test_a_new_dispatch_on_a_branch_still_being_worked_stops_the_old_run(s
     assert f"snugban:{DISPATCH}" in agent.cancelled_sessions
 
 
+@pytest.mark.asyncio
+async def test_dispatches_on_one_branch_taken_at_once_never_run_together(setup):
+    receiver, agent, snugban = setup
+    await start_dispatch(receiver, agent)
+    snugban.ack_gate = asyncio.Event()
+    for dispatch_id in ("01KJDISPATCHB000000000000", "01KJDISPATCHC000000000000"):
+        await receiver.handle(*signed(dispatch_payload(dispatch_id)))
+    await asyncio.sleep(0.02)
+    snugban.ack_gate.set()
+    await until(lambda: len(agent.turns) == 3)
+    await asyncio.sleep(0.05)
+
+    live = [t for t in agent.turns if not t.cancelled]
+    assert len(live) == 1, [t.chat_id for t in live]
+
+
 # ---------------------------------------------------------------------------
 # abort
 # ---------------------------------------------------------------------------
