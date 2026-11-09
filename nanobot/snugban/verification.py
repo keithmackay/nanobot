@@ -31,7 +31,8 @@ def verify_signature(
     lower = {name.lower(): value for name, value in headers.items()}
     timestamp = lower.get(TIMESTAMP_HEADER, "")
     signature = lower.get(SIGNATURE_HEADER, "")
-    if not (timestamp.isascii() and timestamp.isdigit()) or not signature:
+    # Unix seconds have 10 digits until 2286; anything far longer is refused before int().
+    if not (timestamp.isascii() and timestamp.isdigit()) or len(timestamp) > 12 or not signature:
         return False
     if abs(now - int(timestamp)) > TOLERANCE_SECONDS:
         return False

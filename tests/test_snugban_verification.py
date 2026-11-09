@@ -111,3 +111,9 @@ def test_seen_ids_can_forget_an_id():
     seen.discard("a")
     assert seen.add("a", now=1)
     assert "a" in seen
+
+
+def test_refuses_an_over_long_timestamp_without_raising():
+    timestamp = "1" * 5000
+    headers = _headers(timestamp=timestamp, signature=sign(SECRET, timestamp, BODY))
+    assert not verify_signature(SECRET, headers, BODY, now=float(TIMESTAMP))
