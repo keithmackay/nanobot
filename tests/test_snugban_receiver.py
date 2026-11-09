@@ -78,6 +78,7 @@ class FakeSnugban:
         self.status: dict[str, int] = {}  # report ("ack", "heartbeat", ...) -> status
         self.state = "running"
         self.unreachable: set[str] = set()
+        self.broken: set[str] = set()  # reports that fail with an unexpected error
         self.ack_gate: asyncio.Event | None = None  # when set, acks wait for it
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -89,6 +90,8 @@ class FakeSnugban:
         self.requests.append((report, dispatch_id, body))
         if report in self.unreachable:
             raise httpx.ConnectError("unreachable")
+        if report in self.broken:
+            raise RuntimeError(f"{report} broke unexpectedly")
         status = self.status.get(report, 200)
         if status != 200:
             return httpx.Response(status, json={"error": {"code": "INVALID_STATE", "message": "x"}})
@@ -555,6 +558,29 @@ async def test_heartbeats_are_sent_while_the_turn_runs_and_stop_after(setup, tmp
     await asyncio.sleep(0.1)
     assert len(snugban.reports("heartbeat")) == sent
     await receiver.close()
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_heartbeat_failure_is_logged(setup, tmp_path):
+    _, agent, snugban = setup
+    receiver = SnugbanReceiver(
+        secret=SECRET,
+        client=SnugbanClient("http://x", KEY, http=httpx.AsyncClient(
+            transport=httpx.MockTransport(snugban))),
+        agent=agent,
+        workspace=tmp_path,
+        clock=lambda: float(NOW),
+        heartbeat_every_s=0.02,
+    )
+    logged: list[str] = []
+    sink = logger.add(lambda message: logged.append(str(message)), level="ERROR")
+    try:
+        snugban.broken.add("heartbeat")
+        await start_dispatch(receiver, agent)
+        await until(lambda: any("heartbeat broke unexpectedly" in line for line in logged))
+    finally:
+        logger.remove(sink)
+        await receiver.close()
 
 
 @pytest.mark.asyncio

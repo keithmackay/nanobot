@@ -308,8 +308,8 @@ class SnugbanReceiver:
     def _start_turns(self, run: _Run) -> None:
         if run.ended or run.paused or run.working or not run.pending:
             return
-        run.worker = asyncio.create_task(self._work(run))
-        run.heartbeat = asyncio.create_task(self._beat(run))
+        run.worker = self._in_background(self._work(run))
+        run.heartbeat = self._in_background(self._beat(run))
 
     async def _work(self, run: _Run) -> None:
         dispatch_id = run.dispatch.dispatch_id
@@ -324,7 +324,7 @@ class SnugbanReceiver:
                     await _cancel(run.heartbeat)
                     await self._check_reported(run)
                     if run.pending and not run.ended:  # an answer arrived meanwhile
-                        run.heartbeat = asyncio.create_task(self._beat(run))
+                        run.heartbeat = self._in_background(self._beat(run))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -401,10 +401,12 @@ class SnugbanReceiver:
             if old.ended:
                 del self._runs[dispatch_id]
 
-    def _in_background(self, coro) -> None:
+    def _in_background(self, coro) -> asyncio.Task:
+        """Runs *coro* as a task the receiver keeps, logging it if it fails unexpectedly."""
         task = asyncio.create_task(coro)
         self._background.add(task)
         task.add_done_callback(self._finished_in_background)
+        return task
 
     def _finished_in_background(self, task: asyncio.Task) -> None:
         self._background.discard(task)
