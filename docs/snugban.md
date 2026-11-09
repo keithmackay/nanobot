@@ -10,10 +10,15 @@ nanobot runs on another host and reaches Snugban over Tailscale. Below, `snugban
 
 ### 1. Make Snugban reachable over the tailnet
 
-Snugban listens on `127.0.0.1:7420` by default. In `~/.snugban/config.toml` on snugban-host, set `[server] host` to an address nanobot-host can reach (its Tailscale address) and `[server] public_url`, then restart Snugban. From nanobot-host, check:
+Snugban listens on `127.0.0.1:7420` by default. Either of the two setups in Snugban's `docs/agent-protocol.md` works:
+
+- **Recommended: `tailscale serve`.** Snugban stays on `127.0.0.1`, and Tailscale serves it to the tailnet over HTTPS (MagicDNS and HTTPS certificates must be on in the tailnet's admin console). On snugban-host, run `tailscale serve --bg 7420`, set `[server] public_url = "https://snugban-host.<tailnet>.ts.net"` in `~/.snugban/config.toml`, and restart Snugban. Snugban's URL is then `https://snugban-host.<tailnet>.ts.net`, with no port.
+- **Or: bind Snugban to its Tailscale address.** Set `[server] host` to snugban-host's Tailscale IP (`tailscale ip -4`) and `[server] public_url = "http://snugban-host.<tailnet>.ts.net:7420"`, then restart. Snugban's URL is then `http://snugban-host.<tailnet>.ts.net:7420`. WireGuard still encrypts the traffic between tailnet hosts, but Snugban itself speaks plain HTTP.
+
+The examples below use the `tailscale serve` URL. With the bound address, use `http://snugban-host.<tailnet>.ts.net:7420` in its place everywhere: in `gateway.snugban.url` (or `SNUGBAN_URL`) and, with `/mcp` added, in the MCP server's `url`. From nanobot-host, check:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' http://snugban-host.<tailnet>.ts.net:7420/api/health   # 200
+curl -s -o /dev/null -w '%{http_code}\n' https://snugban-host.<tailnet>.ts.net/api/health   # 200
 ```
 
 ### 2. Register nanobot in Snugban
@@ -38,7 +43,7 @@ The agent reports through Snugban's MCP tools, which it sees as `mcp_snugban_<to
   "tools": {
     "mcpServers": {
       "snugban": {
-        "url": "http://snugban-host.<tailnet>.ts.net:7420/mcp",
+        "url": "https://snugban-host.<tailnet>.ts.net/mcp",
         "headers": { "Authorization": "Bearer sb_agent_…" },
         "toolTimeout": 60
       }
@@ -59,7 +64,7 @@ Either in `~/.nanobot/config.json`:
     "host": "100.x.y.z",
     "port": 18790,
     "snugban": {
-      "url": "http://snugban-host.<tailnet>.ts.net:7420",
+      "url": "https://snugban-host.<tailnet>.ts.net",
       "agentKey": "sb_agent_…",
       "webhookSecret": "…"
     }
@@ -71,7 +76,7 @@ or, to keep the key and secret out of the file, leave `gateway.snugban` out and 
 
 | Variable | Value |
 | --- | --- |
-| `SNUGBAN_URL` | `http://snugban-host.<tailnet>.ts.net:7420` |
+| `SNUGBAN_URL` | `https://snugban-host.<tailnet>.ts.net` (or the bound address, `http://snugban-host.<tailnet>.ts.net:7420`) |
 | `SNUGBAN_AGENT_KEY` | the `sb_agent_…` key |
 | `SNUGBAN_WEBHOOK_SECRET` | the webhook secret |
 
@@ -80,7 +85,7 @@ A value in `config.json` wins over its environment variable. If only some are se
 `gateway.host` and `gateway.port` set where the webhook server listens; `nanobot gateway --port` overrides the port. Set `host` to nanobot-host's Tailscale IP (`tailscale ip -4`), not `0.0.0.0`: the same server answers the unauthenticated `POST /message` (see [Security](#security)), and binding to the Tailscale address keeps it off every other network. If n8n on the LAN still calls `/message`, it must then use the tailnet address too. Restart the gateway, which should print:
 
 ```
-✓ Snugban: webhooks at http://100.x.y.z:18790/snugban, reporting to http://snugban-host.<tailnet>.ts.net:7420
+✓ Snugban: webhooks at http://100.x.y.z:18790/snugban, reporting to https://snugban-host.<tailnet>.ts.net
 ```
 
 ### 5. Let the agent push
