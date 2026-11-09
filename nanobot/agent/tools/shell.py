@@ -9,9 +9,12 @@ from typing import Any
 
 from nanobot.agent.tools.base import Tool
 
+# process_group=0 makes the command lead a process group of its own (POSIX only).
+_OWN_PROCESS_GROUP = {"process_group": 0} if hasattr(os, "killpg") else {}
+
 
 def _kill_process_group(process: asyncio.subprocess.Process) -> None:
-    """Kill a command started in its own session, with every process it started."""
+    """Kill a command started in its own process group, with every process it started."""
     try:
         if hasattr(os, "killpg"):
             os.killpg(process.pid, signal.SIGKILL)
@@ -86,14 +89,15 @@ class ExecTool(Tool):
             env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
 
         try:
-            # Its own process group, so the command's children can be stopped with it.
+            # Its own process group, so the command's children can be stopped with it, but
+            # still nanobot's session, so it keeps the terminal (sudo, ssh and git prompts).
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
-                start_new_session=True,
+                **_OWN_PROCESS_GROUP,
             )
             
             try:

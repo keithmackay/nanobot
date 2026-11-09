@@ -41,6 +41,11 @@ _TOOL_INJECTION = (
 )
 
 
+# process_group=0 makes claude lead a process group of its own (POSIX only), which can be
+# killed whole, while it stays in nanobot's session and keeps the terminal.
+_OWN_PROCESS_GROUP = {"process_group": 0} if hasattr(os, "killpg") else {}
+
+
 class _ClaudeProcess:
     """One `claude` run in its own process group, which a cancelled turn can kill.
 
@@ -63,7 +68,7 @@ class _ClaudeProcess:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                start_new_session=True,
+                **_OWN_PROCESS_GROUP,
             )
         try:
             stdout, stderr = self._proc.communicate(timeout=timeout)

@@ -62,3 +62,18 @@ async def test_timed_out_exec_kills_the_command_and_its_children(tmp_path: Path)
 
     assert "timed out" in result
     assert await _wait_until_gone(int(pidfile.read_text().strip()))
+
+
+@pytest.mark.asyncio
+async def test_exec_runs_the_command_in_its_own_group_but_nanobots_session(tmp_path: Path):
+    """Its own process group can be killed whole; staying in our session keeps the terminal
+    (sudo, ssh and git prompts in `nanobot agent`)."""
+    import sys
+
+    tool = ExecTool(timeout=30, working_dir=str(tmp_path))
+    out = await tool.execute(
+        command=f"{sys.executable} -c 'import os; print(os.getsid(0), os.getpgid(0))'"
+    )
+    sid, pgid = (int(x) for x in out.split())
+    assert sid == os.getsid(0)
+    assert pgid != os.getpgid(0)

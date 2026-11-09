@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -229,15 +228,60 @@ async def test_chat_cli_not_found(provider):
     assert "claude" in resp.content.lower()
 
 
+def _alive(pid: int) -> bool:
+    import os
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 @pytest.mark.asyncio
-async def test_chat_timeout(provider):
-    proc = _fake_popen("")
-    proc.communicate.side_effect = [subprocess.TimeoutExpired(cmd="claude", timeout=120), ("", "")]
-    proc.poll.return_value = None
-    with patch("subprocess.Popen", return_value=proc), patch("os.killpg"):
-        resp = await provider.chat([{"role": "user", "content": "Hi"}])
+async def test_chat_timeout(tmp_path):
+    """A timed-out claude run is killed with everything it started."""
+    import asyncio
+
+    pidfile = tmp_path / "child.pid"
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nwait\n")
+    fake_claude.chmod(0o755)
+    provider = ClaudeCliProvider(claude_bin=str(fake_claude), timeout=1)
+
+    resp = await provider.chat([{"role": "user", "content": "Hi"}])
+
     assert resp.finish_reason == "error"
     assert "timed out" in resp.content.lower()
+    child = int(pidfile.read_text().strip())
+    for _ in range(100):
+        if not _alive(child):
+            break
+        await asyncio.sleep(0.05)
+    assert not _alive(child), "claude's child process survived the timeout"
+
+
+@pytest.mark.asyncio
+async def test_claude_runs_in_its_own_group_but_nanobots_session(tmp_path):
+    """Its own process group can be killed whole; staying in our session keeps the terminal."""
+    import os
+    import sys
+
+    fake_claude = tmp_path / "claude"
+    fake_claude.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os\n"
+        "print(json.dumps({'type': 'result', 'is_error': False,\n"
+        "                  'result': f'{os.getsid(0)} {os.getpgid(0)} {os.getpid()}'}))\n"
+    )
+    fake_claude.chmod(0o755)
+    provider = ClaudeCliProvider(claude_bin=str(fake_claude), timeout=30)
+
+    resp = await provider.chat([{"role": "user", "content": "Hi"}])
+
+    sid, pgid, pid = (int(x) for x in resp.content.split())
+    assert sid == os.getsid(0)
+    assert pgid == pid
 
 
 @pytest.mark.asyncio
