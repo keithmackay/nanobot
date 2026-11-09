@@ -352,12 +352,21 @@ class HeartbeatConfig(Base):
     model: str = ""  # Override model for heartbeat decision phase (empty = use main agent model)
 
 
+class SnugbanConfig(Base):
+    """Snugban peer-agent receiver (POST /snugban). Each empty value falls back to an env var."""
+
+    url: str = ""  # Snugban's URL, e.g. http://snugban-host.tailnet.ts.net:7420 (SNUGBAN_URL)
+    agent_key: str = ""  # sb_agent_… key issued on Snugban's Agents page (SNUGBAN_AGENT_KEY)
+    webhook_secret: str = ""  # webhook secret issued with the key (SNUGBAN_WEBHOOK_SECRET)
+
+
 class GatewayConfig(Base):
     """Gateway/server configuration."""
 
     host: str = "0.0.0.0"
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    snugban: SnugbanConfig = Field(default_factory=SnugbanConfig)
 
 
 class WebSearchConfig(Base):

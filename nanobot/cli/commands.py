@@ -229,6 +229,11 @@ def _create_workspace_templates(workspace: Path):
     (workspace / "skills").mkdir(exist_ok=True)
 
 
+def _webhook_address(config: Config, port: int | None) -> tuple[str, int]:
+    """Where the gateway's webhook server listens: gateway.host, and --port or gateway.port."""
+    return config.gateway.host, port if port is not None else config.gateway.port
+
+
 def _make_provider(config: Config, model: str | None = None):
     """Create the appropriate LLM provider from config.
 
@@ -283,7 +288,9 @@ def _make_provider(config: Config, model: str | None = None):
 
 @app.command()
 def gateway(
-    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
+    port: int | None = typer.Option(
+        None, "--port", "-p", help="Gateway port (default: gateway.port, 18790)"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Start the nanobot gateway."""
@@ -301,9 +308,9 @@ def gateway(
         import logging
         logging.basicConfig(level=logging.DEBUG)
     
-    console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
-    
     config = load_config()
+    host, port = _webhook_address(config, port)
+    console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
@@ -518,8 +525,31 @@ def gateway(
 
     # Create webhook server
     from nanobot.webhook.server import WebhookServer
-    webhook = WebhookServer(agent=agent, health_service=health, port=port)
-    console.print(f"[green]✓[/green] Webhook: http://0.0.0.0:{port}/message")
+    snugban = None
+    from nanobot.snugban.settings import snugban_settings
+    try:
+        snugban_found = snugban_settings(config.gateway.snugban)
+    except ValueError as exc:
+        snugban_found = None
+        console.print(f"[red]✗[/red] Snugban receiver not started: {exc}")
+    if snugban_found:
+        from nanobot.snugban.client import SnugbanClient
+        from nanobot.snugban.receiver import SnugbanReceiver
+        snugban = SnugbanReceiver(
+            secret=snugban_found.webhook_secret,
+            client=SnugbanClient(snugban_found.url, snugban_found.agent_key),
+            agent=agent,
+            workspace=config.workspace_path,
+        )
+    webhook = WebhookServer(
+        agent=agent, health_service=health, host=host, port=port, snugban=snugban
+    )
+    console.print(f"[green]✓[/green] Webhook: http://{host}:{port}/message")
+    if snugban:
+        console.print(
+            f"[green]✓[/green] Snugban: webhooks at http://{host}:{port}/snugban, "
+            f"reporting to {snugban_found.url}"
+        )
 
     async def run():
         try:
@@ -556,6 +586,8 @@ def gateway(
         except KeyboardInterrupt:
             console.print("\nShutting down...")
         finally:
+            if snugban:
+                await snugban.close()  # stop dispatch runs before their tools go away
             await agent.close_mcp()
             heartbeat.stop()
             health.stop()
